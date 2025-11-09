@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useNavigate } from "react-router-dom";
+import fashionVideo from "../assets/fashion.mp4";
 import { Menu, X, Sparkles, LogIn, Home, Info, Mail } from "lucide-react";
 
 const HomePage = () => {
@@ -148,41 +149,47 @@ const HomePage = () => {
         </motion.p>
 
         {/* Video/Image Showcase */}
-        <motion.div
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ delay: 0.5, duration: 0.8 }}
-          className="relative w-full max-w-4xl mb-12"
-        >
-          <div className="relative rounded-3xl overflow-hidden shadow-2xl border border-white/50">
-            {/* Replace with your video */}
-            <div className="w-full h-[300px] md:h-[400px] lg:h-[500px] bg-gradient-to-br from-pink-200 via-rose-200 to-red-200 flex items-center justify-center">
-              <div className="text-center space-y-4">
-                <Sparkles className="w-20 h-20 text-white/80 mx-auto animate-pulse" />
-                <p className="text-white/90 text-xl font-medium">Your Fashion Video Here</p>
-                <p className="text-white/70 text-sm px-4">Replace this with your fashionVideo import</p>
-              </div>
-            </div>
-            {/* Overlay gradient */}
-            <div className="absolute inset-0 bg-gradient-to-t from-black/20 via-transparent to-transparent"></div>
-          </div>
+        {/* Video/Image Showcase */}
+<motion.div
+  initial={{ opacity: 0, scale: 0.9 }}
+  animate={{ opacity: 1, scale: 1 }}
+  transition={{ delay: 0.5, duration: 0.8 }}
+  className="relative w-full max-w-4xl mb-12"
+>
+  <div className="relative rounded-3xl overflow-hidden shadow-2xl border border-white/50">
+    {/* Replace with your video */}
+    <video
+      src={fashionVideo}
+      controls
+      autoPlay
+      muted
+      loop
+      className="w-full h-[300px] md:h-[400px] lg:h-[500px] object-cover"
+    >
+      Your browser does not support the video tag.
+    </video>
 
-          {/* Floating decoration cards */}
-          <motion.div
-            animate={{ y: [0, -10, 0] }}
-            transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
-            className="absolute -top-6 -left-6 bg-white p-4 rounded-2xl shadow-xl hidden lg:block"
-          >
-            <p className="text-4xl">👗</p>
-          </motion.div>
-          <motion.div
-            animate={{ y: [0, 10, 0] }}
-            transition={{ duration: 3, repeat: Infinity, ease: "easeInOut", delay: 1 }}
-            className="absolute -bottom-6 -right-6 bg-white p-4 rounded-2xl shadow-xl hidden lg:block"
-          >
-            <p className="text-4xl">👠</p>
-          </motion.div>
-        </motion.div>
+    {/* Overlay gradient */}
+    <div className="absolute inset-0 bg-gradient-to-t from-black/20 via-transparent to-transparent"></div>
+  </div>
+
+  {/* Floating decoration cards */}
+  <motion.div
+    animate={{ y: [0, -10, 0] }}
+    transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+    className="absolute -top-6 -left-6 bg-white p-4 rounded-2xl shadow-xl hidden lg:block"
+  >
+    <p className="text-4xl">👗</p>
+  </motion.div>
+  <motion.div
+    animate={{ y: [0, 10, 0] }}
+    transition={{ duration: 3, repeat: Infinity, ease: "easeInOut", delay: 1 }}
+    className="absolute -bottom-6 -right-6 bg-white p-4 rounded-2xl shadow-xl hidden lg:block"
+  >
+    <p className="text-4xl">👠</p>
+  </motion.div>
+</motion.div>
+
 
         {/* CTA Button */}
         <motion.div
