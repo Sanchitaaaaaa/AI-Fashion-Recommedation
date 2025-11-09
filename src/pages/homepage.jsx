@@ -1,92 +1,73 @@
-import { motion } from 'framer-motion';
-import { useNavigate } from 'react-router-dom';
+import React from "react";
+import { motion } from "framer-motion";
+import fashionVideo from "../assets/fashion.mp4";
+import { useNavigate } from "react-router-dom";
 
 const HomePage = () => {
   const navigate = useNavigate();
 
   return (
-    <motion.div
-      initial={{ opacity: 0, scale: 1.5 }}
-      animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.5 }}
-      transition={{ duration: 0.6, ease: "easeOut" }}
-      className="min-h-screen w-full bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50 p-4 sm:p-6 md:p-8"
-    >
-      {/* Header */}
-      <motion.header
-        initial={{ y: -50, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ delay: 0.2 }}
-        className="max-w-7xl mx-auto mb-8"
+    <div className="min-h-screen bg-gradient-to-br from-rose-50 via-pink-50 to-rose-100 flex flex-col items-center justify-center px-6 py-10 text-center">
+      
+      {/* Heading */}
+      <motion.h1
+        initial={{ opacity: 0, y: -20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.8 }}
+        className="text-4xl md:text-5xl lg:text-6xl font-extrabold text-gray-900 mb-4"
       >
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">
-            Fashion Hub
-          </h1>
-          <button
-            onClick={() => navigate('/')}
-            className="px-4 py-2 bg-white rounded-lg shadow-md hover:shadow-lg transition-shadow text-gray-700 font-medium text-sm sm:text-base"
-          >
-            ← Back
-          </button>
-        </div>
-      </motion.header>
+        AI Fashion Recommender
+      </motion.h1>
 
-      {/* Main Content */}
-      <motion.main
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.4 }}
-        className="max-w-7xl mx-auto"
+      {/* Subtitle */}
+      <motion.p
+        initial={{ opacity: 0, y: 15 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.2, duration: 0.8 }}
+        className="text-gray-700 text-base md:text-lg lg:text-xl mb-10 max-w-2xl leading-relaxed"
       >
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 md:gap-8">
-          {[1, 2, 3, 4, 5, 6].map((item, index) => (
-            <motion.div
-              key={item}
-              initial={{ opacity: 0, y: 50 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.5 + index * 0.1 }}
-              whileHover={{ scale: 1.05, y: -10 }}
-              className="bg-white rounded-xl shadow-lg overflow-hidden cursor-pointer group"
-            >
-              <div className="h-48 sm:h-56 md:h-64 bg-gradient-to-br from-purple-200 to-pink-200 relative overflow-hidden">
-                <motion.div
-                  className="absolute inset-0 bg-black opacity-0 group-hover:opacity-20 transition-opacity"
-                />
-                <div className="absolute inset-0 flex items-center justify-center text-white text-6xl font-bold">
-                  {item}
-                </div>
-              </div>
-              <div className="p-4 sm:p-6">
-                <h3 className="text-lg sm:text-xl font-bold text-gray-800 mb-2">
-                  Product {item}
-                </h3>
-                <p className="text-gray-600 text-sm sm:text-base">
-                  Discover amazing fashion recommendations powered by AI
-                </p>
-                <motion.button
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  className="mt-4 w-full bg-gradient-to-r from-purple-600 to-pink-600 text-white py-2 sm:py-3 rounded-lg font-medium text-sm sm:text-base hover:shadow-lg transition-shadow"
-                >
-                  View Details
-                </motion.button>
-              </div>
-            </motion.div>
-          ))}
-        </div>
-      </motion.main>
+        Discover your style with{" "}
+        <span className="text-pink-600 font-semibold">
+          AI-powered fashion insights
+        </span>{" "}
+        — tailored just for you.
+      </motion.p>
 
-      {/* Footer */}
-      <motion.footer
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 1 }}
-        className="max-w-7xl mx-auto mt-12 text-center text-gray-600 text-sm sm:text-base"
+      {/* Video Container */}
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ delay: 0.4, duration: 0.8 }}
+        className="relative w-full max-w-1xl rounded-2xl overflow-hidden shadow-xl border border-pink-200"
       >
-        <p>© 2024 AI Fashion Recommendations. All rights reserved.</p>
-      </motion.footer>
-    </motion.div>
+        <video
+          src={fashionVideo}
+          autoPlay
+          loop
+          muted
+          playsInline
+          className="w-full h-[220px] md:h-[350px] lg:h-[400px] object-cover rounded-3xl"
+        />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-transparent rounded-3xl"></div>
+      </motion.div>
+
+      {/* Button */}
+      <motion.div
+        initial={{ opacity: 0, y: 25 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.8, duration: 0.7 }}
+        className="mt-10"
+      >
+        <motion.button
+          whileHover={{ scale: 1.07 }}
+          whileTap={{ scale: 0.96 }}
+          onClick={() => navigate("/login")}
+          className="bg-gradient-to-r from-pink-500 via-rose-500 to-red-400 text-white font-bold text-lg md:text-xl px-10 py-4 rounded-full shadow-lg hover:shadow-pink-300 transition-all duration-300"
+        >
+          Login / Sign Up
+        </motion.button>
+      </motion.div>
+    </div>
   );
 };
 
