@@ -1,7 +1,9 @@
 import { useState } from 'react';
-import { User, ArrowRight } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { User, ArrowRight, ArrowLeft } from 'lucide-react';
 
 const BodyDetails = () => {
+  const navigate = useNavigate();
   const [formData, setFormData] = useState({
     height: '',
     weight: '',
@@ -28,6 +30,15 @@ const BodyDetails = () => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-50 p-6">
       <div className="max-w-3xl mx-auto">
+        {/* Back Button */}
+        <button
+          onClick={() => navigate('/home')}
+          className="mb-4 flex items-center gap-2 text-gray-600 hover:text-blue-600 transition-colors group"
+        >
+          <ArrowLeft className="w-5 h-5 group-hover:-translate-x-1 transition-transform" />
+          <span className="font-medium">Back to Home</span>
+        </button>
+
         <div className="bg-white rounded-2xl shadow-lg p-8">
           <div className="flex items-center justify-between mb-8">
             <h1 className="text-3xl font-bold text-gray-800">Body Details</h1>
