@@ -1,0 +1,24 @@
+#Core Backend
+fastapi
+uvicorn[standard]
+python-multipart
+python-dotenv
+
+#Database
+pymongo
+
+#Authentication
+pymongo
+
+#Image Processing
+Pillow          
+opencv-python
+
+#AI-ML
+mediapipe
+tensorflow
+scikit-learn    
+numpy
+
+#Optional 
+requests
