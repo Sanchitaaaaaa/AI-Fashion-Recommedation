@@ -1,10 +1,9 @@
 import cv2
-import mediapipe
+import mediapipe as mp
 
-mp_pose = mediapipe.solutions.pose
+mp_pose = mp.solutions.pose
 
 def extract_landmarks(image_path: str):
-    """Returns list of landmark objects or None"""
     image = cv2.imread(image_path)
     if image is None:
         return None

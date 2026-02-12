@@ -7,7 +7,9 @@ from app.services.body_shape import classify_body_shape
 router = APIRouter(prefix="/recommend", tags=["Recommendation"])
 
 UPLOAD_DIR = "data/uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+if not os.path.isdir(UPLOAD_DIR):
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+
 
 @router.post("/")
 async def upload_image(file: UploadFile = File(...)):
