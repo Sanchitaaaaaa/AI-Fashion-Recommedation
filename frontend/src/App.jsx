@@ -8,6 +8,7 @@ import FaceDetails from './components/face_details';
 import Preferences from './components/preferences';
 import Settings from './components/settings';
 import Support from './components/support';
+import UploadPage from "./pages/upload";
 
 // Import your publishable key from environment variables
 const PUBLISHABLE_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
@@ -38,6 +39,8 @@ function ClerkProviderWithRoutes() {
           <Route path="/preferences" element={<Preferences />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/support" element={<Support />} />
+          <Route path="/upload" element={<UploadPage />} />
+
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </AnimatePresence>
