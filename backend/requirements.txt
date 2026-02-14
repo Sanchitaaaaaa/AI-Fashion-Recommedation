@@ -1,24 +1,36 @@
-#Core Backend
-fastapi
-uvicorn[standard]
-python-multipart
-python-dotenv
+# ============================================
+# AI FASHION RECOMMENDATION SYSTEM
+# Python 3.10 Complete Dependencies
+# ============================================
 
-#Database
-pymongo
+# Core Backend
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+python-dotenv==1.0.0
 
-#Authentication
-pyjwt
+# Database
+pymongo==4.6.0
 
-#Image Processing
-Pillow          
-opencv-python
+# Authentication
+pyjwt==2.11.0
 
-#AI-ML
-mediapipe
-tensorflow
-scikit-learn    
-numpy
+# Image Processing
+Pillow==10.1.0
+opencv-python==4.8.1.78
 
-#Optional 
-requests
+# AI-ML
+mediapipe==0.10.9
+tensorflow==2.14.0
+scikit-learn==1.3.2
+numpy==1.24.3
+
+# DNS Resolution (REQUIRED for MongoDB Atlas)
+dnspython==2.4.2
+
+# Optional but Recommended
+requests==2.31.0
+aiohttp==3.9.1
+aiofiles==23.2.1
+pydantic==2.5.0
+pydantic-settings==2.1.0

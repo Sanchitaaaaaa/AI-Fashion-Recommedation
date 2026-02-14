@@ -11,7 +11,7 @@ const StartPage = () => {
     setIsExiting(true);
     setTimeout(() => {
       navigate('/home');
-    }, 600); // Wait for animation to complete
+    }, 600);
   };
 
   return (
