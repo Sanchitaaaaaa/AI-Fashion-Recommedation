@@ -1,5 +1,5 @@
 """
-Recommendation Engine - FIXED VERSION
+Recommendation Engine - WITH IMAGES
 """
 
 import numpy as np
@@ -31,12 +31,10 @@ def get_recommendations(
     body_type: str = None,
     skin_tone: str = None
 ):
-    """Get outfit recommendations"""
+    """Get outfit recommendations WITH IMAGES"""
     
     try:
-        # Check if collection exists (NOT using if not)
         if collection is None:
-            print("❌ Collection is None")
             return {
                 "success": False,
                 "error": "Database not connected"
@@ -65,7 +63,7 @@ def get_recommendations(
                 "recommendations": []
             }
         
-        # Create recommendations
+        # Create recommendations WITH IMAGES
         recommendations = []
         
         for idx, outfit in enumerate(all_outfits):
@@ -73,16 +71,20 @@ def get_recommendations(
                 # Random similarity score
                 sim_score = round(0.65 + (np.random.random() * 0.30), 2)
                 
+                # GET IMAGE from MongoDB
+                outfit_image = outfit.get("image", None)
+                
                 recommendations.append({
                     "rank": idx + 1,
                     "outfit_name": outfit.get("name", f"Outfit {idx+1}"),
-                    "image": None,
+                    "image": outfit_image,  # ✅ INCLUDE IMAGE!
                     "category": outfit.get("category", ""),
                     "color": outfit.get("color", ""),
                     "sleeves": outfit.get("sleeves", ""),
                     "similarity_score": sim_score,
                     "similarity_percentage": f"{int(sim_score * 100)}%"
                 })
+            
             except Exception as e:
                 print(f"⚠️  Error processing outfit: {str(e)}")
                 continue
@@ -102,7 +104,7 @@ def get_recommendations(
         
         final_recs = recommendations[:top_k]
         
-        print(f"✅ Returning {len(final_recs)} recommendations\n")
+        print(f"✅ Returning {len(final_recs)} recommendations with images\n")
         
         return {
             "success": True,

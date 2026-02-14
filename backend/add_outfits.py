@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Add outfit images from nested folders (dress, hats, etc.) to MongoDB"""
+"""Add outfit images from nested folders to MongoDB with base64 encoding"""
 
 from pymongo import MongoClient
 import os
@@ -17,7 +17,7 @@ if not MONGO_URL:
 
 print("Connecting to MongoDB...")
 client = MongoClient(MONGO_URL)
-db = client["fashion_db"]
+db = client["ai_fashion"]
 
 # Path to outfit images folder
 OUTFIT_IMAGES_PATH = "outfit_images"
@@ -85,17 +85,18 @@ try:
     
     outfits_collection = db["outfits"]
     
-    # Clear existing
-    deleted = outfits_collection.delete_many({})
-    print(f"✅ Deleted {deleted.deleted_count} existing outfits\n")
+    # OPTION 1: Clear and recreate (uncomment if you want fresh data)
+    # deleted = outfits_collection.delete_many({})
+    # print(f"✅ Deleted {deleted.deleted_count} existing outfits\n")
     
-    # Add outfits with local images
-    print("Adding outfits with local images...")
+    # OPTION 2: Update existing outfits with images (RECOMMENDED)
+    print("Updating existing outfits with images...\n")
     
     inserted_count = 0
+    updated_count = 0
     
     for outfit_info in outfit_files:
-        outfit_name = outfit_info['name']
+        outfit_name = outfit_info['filename']
         filepath = outfit_info['filepath']
         category = outfit_info['category']
         
@@ -105,35 +106,64 @@ try:
         image_data = encode_image_to_base64(filepath)
         
         if image_data:
-            outfit = {
-                "name": outfit_name,
-                "type": category.lower(),  # dress, hats, etc.
-                "color": "Multi",
-                "sleeve": "Short Sleeves",
-                "occasion": "Casual",
-                "image": image_data,
-                "filename": outfit_info['filename'],
-                "category": category
-            }
+            # Try to UPDATE existing outfit first
+            result = outfits_collection.update_one(
+                {"name": outfit_name},
+                {
+                    "$set": {
+                        "image": image_data,
+                        "category": category,
+                        "filename": outfit_info['filename']
+                    }
+                }
+            )
             
-            outfits_collection.insert_one(outfit)
-            inserted_count += 1
-            print(" ✅")
+            if result.matched_count > 0:
+                updated_count += 1
+                print(" ✅ (updated)")
+            else:
+                # If not found, insert new
+                outfit = {
+                    "name": outfit_name,
+                    "type": category.lower(),
+                    "color": "Multi",
+                    "sleeves": "Short Sleeves",
+                    "occasion": "Casual",
+                    "image": image_data,
+                    "filename": outfit_info['filename'],
+                    "category": category,
+                    "body_types": ["hourglass", "pear", "rectangle", "apple"],
+                    "skin_tones": ["fair", "medium", "tan", "deep"],
+                    "features": [0.0] * 512
+                }
+                
+                outfits_collection.insert_one(outfit)
+                inserted_count += 1
+                print(" ✅ (inserted)")
         else:
-            print(" ❌")
+            print(" ❌ (failed)")
     
     # Verify
-    count = outfits_collection.count_documents({})
-    print(f"\n✅ Total outfits in database: {count}")
-    print(f"✅ Inserted {inserted_count} outfits with real images")
+    total = outfits_collection.count_documents({})
+    with_images = outfits_collection.count_documents({"image": {"$ne": None}})
+    
+    print(f"\n{'='*60}")
+    print(f"✅ COMPLETE!")
+    print(f"{'='*60}")
+    print(f"Total outfits in database: {total}")
+    print(f"Outfits with images: {with_images}")
+    print(f"Updated: {updated_count}")
+    print(f"Inserted: {inserted_count}")
     
     # Show breakdown by category
-    print("\n📊 Breakdown by category:")
+    print(f"\n📊 Breakdown by category:")
     for category in set(item['category'] for item in outfit_files):
         cat_count = sum(1 for item in outfit_files if item['category'] == category)
         print(f"   {category.capitalize()}: {cat_count} images")
     
-    print("\n🎉 Real outfit images successfully added from folders!")
+    print(f"\n{'='*60}")
+    print(f"🎉 Real outfit images successfully added!")
+    print(f"{'='*60}")
 
 except Exception as e:
     print(f"❌ Error: {str(e)}")
