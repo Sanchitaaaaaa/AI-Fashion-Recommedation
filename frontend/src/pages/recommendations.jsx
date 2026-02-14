@@ -22,13 +22,13 @@ export default function RecommendationsPage() {
     color: "All Colors",
     sleeve: "All Sleeves",
     occasion: "All Occasions",
-    price: "All Prices",
+    category: "All Categories",
   });
 
   const colorOptions = ["All Colors", "red", "blue", "black", "white", "green", "yellow", "pink", "brown", "grey", "multi"];
   const sleeveOptions = ["All Sleeves", "long", "short", "sleeveless", "unknown"];
   const occasionOptions = ["All Occasions", "casual", "party", "formal", "sports", "beach"];
-  const priceOptions = ["All Prices", "$0-50", "$50-100", "$100-200", "$200+"];
+  const categoryOptions = ["All Categories", "dress", "hat", "longsleeve", "outwear", "pants", "shirt", "shoes", "shorts", "skirt", "t-shirt"];
 
   // Get data from navigation state
   useEffect(() => {
@@ -58,12 +58,15 @@ export default function RecommendationsPage() {
         );
 
         if (response.data.success) {
+          console.log("✅ Recommendations received:", response.data.recommendations.length);
+          console.log("Sample outfit:", response.data.recommendations[0]);
           setRecommendations(response.data.recommendations);
           setFilteredRecommendations(response.data.recommendations);
         } else {
           setError(response.data.error || "Failed to generate");
         }
       } catch (err) {
+        console.error("❌ Error:", err);
         setError("Error generating recommendations");
       } finally {
         setLoading(false);
@@ -73,37 +76,69 @@ export default function RecommendationsPage() {
     generateRecommendations();
   }, [selectedImageId, selectedDetails]);
 
-  // Apply filters when filters change
+  // Apply filters ONLY when filters change
   useEffect(() => {
+    console.log("\n🔄 FILTERING TRIGGERED");
+    console.log("Current filters:", filters);
+    console.log("Total recommendations:", recommendations.length);
+
     let filtered = recommendations;
 
+    // COLOR FILTER
     if (filters.color !== "All Colors") {
-      filtered = filtered.filter((item) =>
-        item.color.toLowerCase().includes(filters.color.toLowerCase())
-      );
+      const targetColor = filters.color.toLowerCase();
+      filtered = filtered.filter((item) => {
+        const itemColor = (item.color || "").toLowerCase();
+        const match = itemColor.includes(targetColor);
+        return match;
+      });
+      console.log(`After color filter (${filters.color}):`, filtered.length);
     }
 
+    // SLEEVE FILTER
     if (filters.sleeve !== "All Sleeves") {
-      filtered = filtered.filter((item) =>
-        item.sleeves.toLowerCase().includes(filters.sleeve.toLowerCase())
-      );
+      const targetSleeve = filters.sleeve.toLowerCase();
+      filtered = filtered.filter((item) => {
+        const itemSleeve = (item.sleeves || "").toLowerCase();
+        const match = itemSleeve.includes(targetSleeve);
+        return match;
+      });
+      console.log(`After sleeve filter (${filters.sleeve}):`, filtered.length);
     }
 
+    // OCCASION FILTER
     if (filters.occasion !== "All Occasions") {
-      filtered = filtered.filter((item) =>
-        item.category.toLowerCase().includes(filters.occasion.toLowerCase())
-      );
+      const targetOccasion = filters.occasion.toLowerCase();
+      filtered = filtered.filter((item) => {
+        const itemOccasion = (item.occasion || "").toLowerCase();
+        const match = itemOccasion.includes(targetOccasion);
+        return match;
+      });
+      console.log(`After occasion filter (${filters.occasion}):`, filtered.length);
     }
 
+    // CATEGORY FILTER
+    if (filters.category !== "All Categories") {
+      const targetCategory = filters.category.toLowerCase();
+      filtered = filtered.filter((item) => {
+        const itemCategory = (item.category || "").toLowerCase();
+        const match = itemCategory === targetCategory;
+        return match;
+      });
+      console.log(`After category filter (${filters.category}):`, filtered.length);
+    }
+
+    console.log("Final result:", filtered.length, "\n");
     setFilteredRecommendations(filtered);
   }, [filters, recommendations]);
 
   const handleFilterChange = (filterType, value) => {
+    console.log(`Changing ${filterType} from ${filters[filterType]} to ${value}`);
     setFilters({
       ...filters,
       [filterType]: value,
     });
-    setOpenDropdown(null); // Close dropdown
+    setOpenDropdown(null);
   };
 
   const handleAddToWishlist = (outfit) => {
@@ -172,7 +207,7 @@ export default function RecommendationsPage() {
               </motion.div>
             </div>
 
-            {/* Filters - IN SAME PAGE */}
+            {/* Filters - ALL 4 FILTERS */}
             <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-white rounded-2xl shadow-lg p-6 mb-8 relative">
               <h3 className="text-xl font-bold text-gray-900 mb-4">🎨 Refine Your Search</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -261,26 +296,26 @@ export default function RecommendationsPage() {
                   )}
                 </div>
 
-                {/* Price Dropdown */}
+                {/* Category Dropdown */}
                 <div className="relative">
                   <button
-                    onClick={() => setOpenDropdown(openDropdown === "price" ? null : "price")}
+                    onClick={() => setOpenDropdown(openDropdown === "category" ? null : "category")}
                     className="w-full flex items-center justify-between px-4 py-3 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors text-gray-900 font-semibold"
                   >
-                    <span>💰 {filters.price}</span>
-                    <ChevronDown className={`w-5 h-5 transition-transform ${openDropdown === "price" ? "rotate-180" : ""}`} />
+                    <span>👗 {filters.category}</span>
+                    <ChevronDown className={`w-5 h-5 transition-transform ${openDropdown === "category" ? "rotate-180" : ""}`} />
                   </button>
-                  {openDropdown === "price" && (
+                  {openDropdown === "category" && (
                     <motion.div
                       initial={{ opacity: 0, y: -10 }}
                       animate={{ opacity: 1, y: 0 }}
-                      className="absolute top-full left-0 right-0 mt-2 bg-white border-2 border-gray-200 rounded-lg shadow-xl z-50"
+                      className="absolute top-full left-0 right-0 mt-2 bg-white border-2 border-gray-200 rounded-lg shadow-xl z-50 max-h-64 overflow-y-auto"
                     >
-                      {priceOptions.map((option) => (
+                      {categoryOptions.map((option) => (
                         <button
                           key={option}
-                          onClick={() => handleFilterChange("price", option)}
-                          className={`w-full text-left px-4 py-3 hover:bg-yellow-100 transition-colors ${filters.price === option ? "bg-yellow-200 font-bold" : ""}`}
+                          onClick={() => handleFilterChange("category", option)}
+                          className={`w-full text-left px-4 py-3 hover:bg-yellow-100 transition-colors ${filters.category === option ? "bg-yellow-200 font-bold" : ""}`}
                         >
                           {option}
                         </button>

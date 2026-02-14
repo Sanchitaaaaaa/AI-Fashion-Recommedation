@@ -391,6 +391,30 @@ const HomePage = () => {
           </motion.div>
         </SignedOut>
 
+        {/* Tips */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+          className="mt-12 grid grid-cols-1 sm:grid-cols-3 gap-4"
+        >
+          {[
+            { icon: "📸", title: "Full Body", desc: "Show full body in photo" },
+            { icon: "💡", title: "Good Light", desc: "Natural lighting works best" },
+            { icon: "😊", title: "Face Visible", desc: "Face needed for skin tone" }
+          ].map((tip, i) => (
+            <motion.div
+              key={i}
+              whileHover={{ y: -5 }}
+              className="bg-white rounded-xl p-4 text-center shadow-sm border border-gray-100"
+            >
+              <p className="text-3xl mb-2">{tip.icon}</p>
+              <p className="font-semibold text-gray-900 text-sm">{tip.title}</p>
+              <p className="text-xs text-gray-600 mt-1">{tip.desc}</p>
+            </motion.div>
+          ))}
+        </motion.div>
+
         {/* Feature Pills */}
         <motion.div
           initial={{ opacity: 0 }}
