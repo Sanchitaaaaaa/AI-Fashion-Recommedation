@@ -3,7 +3,7 @@ import { AnimatePresence } from 'framer-motion';
 import { ClerkProvider } from '@clerk/clerk-react';
 import StartPage from './pages/start_page';
 import HomePage from './pages/homepage';
-import UploadPage from './pages/upload';
+// import UploadPage from './pages/upload';
 import RecommendationsPage from './pages/recommendations';
 import WishlistPage from './components/wishlist';
 import UserDetails from './components/user_details';
@@ -111,13 +111,13 @@ function ClerkProviderWithRoutes() {
                 <Route path="/home" element={<HomePage />} />
                 <Route path="/login" element={<StartPage />} />
 
-                {/* Protected Routes - WITH navbar and sidebar */}
+                {/* Protected Routes - WITH navbar and sidebar
                 <Route 
                   path="/upload" 
                   element={
                     <UploadPage onUploadSuccess={handleUploadSuccess} />
                   } 
-                />
+                /> */}
 
                 <Route
                   path="/recommendations"
