@@ -21,6 +21,9 @@ __pycache__/
 *.pyd
 *.db
 *.sqlite3
+*.egg-info/
+.pytest_cache/
+.coverage
 
 # ===============================
 # Storage / Generated Files
@@ -29,11 +32,31 @@ storage/
 data/
 uploads/
 embeddings/
+temp/
+tmp/
 
 # ===============================
-# Environment Variables
+# Environment Variables - CRITICAL!
 # ===============================
 .env
+.env.local
+.env.*.local
+.env.development
+.env.production
+*.env
+
+# ===============================
+# Secrets & Credentials - CRITICAL!
+# ===============================
+secrets/
+.secrets/
+*.pem
+*.key
+*.crt
+*.p12
+private_key*
+mongodb_uri
+connection_strings
 
 # ===============================
 # Editor / IDE
@@ -45,9 +68,68 @@ embeddings/
 *.njsproj
 *.sln
 *.sw?
+*.vim
+*.swp
+*.swo
+*~
 
 # ===============================
 # OS
 # ===============================
 .DS_Store
 Thumbs.db
+.AppleDouble
+.LSOverride
+
+# ===============================
+# Logs
+# ===============================
+*.log
+logs/
+*.log*
+
+# ===============================
+# Build & Dist
+# ===============================
+build/
+dist/
+*.tar.gz
+*.zip
+
+# ===============================
+# Cache
+# ===============================
+.cache/
+.pytest_cache/
+.eslintcache
+.node_repl_history
+
+# ===============================
+# Testing
+# ===============================
+coverage/
+.nyc_output/
+test_results/
+
+# ===============================
+# IDE Workspace Settings
+# ===============================
+.vscode/settings.json
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/dictionaries
+
+# ===============================
+# MacOS
+# ===============================
+.AppleDouble
+.LSOverride
+*.DS_Store
+._*
+
+# ===============================
+# Windows
+# ===============================
+Thumbs.db
+ehthumbs.db
+Desktop.ini
