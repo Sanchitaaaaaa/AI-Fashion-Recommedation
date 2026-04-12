@@ -297,7 +297,7 @@ const HomePage = () => {
                     <img
                       src={preview}
                       alt="Preview"
-                      className="w-full h-64 sm:h-96 object-cover"
+                      className="w-full max-h-[500px] object-contain bg-gray-50"
                     />
                   </motion.div>
 

@@ -10,6 +10,7 @@ class WishlistItem(BaseModel):
     outfit_name: str
     similarity_score: float = 0.0
     image_id: str = None
+    occasion: str = None
 
 class RemoveWishlistItem(BaseModel):
     user_id: str
@@ -42,6 +43,7 @@ async def add_to_wishlist(item: WishlistItem):
             "outfit_name": item.outfit_name,
             "similarity_score": item.similarity_score,
             "image_id": item.image_id,
+            "occasion": item.occasion,
             "saved_date": datetime.utcnow()
         }
         

@@ -2,6 +2,12 @@
 Outfit Processor - Extracts REAL MobileNet feature vectors from images
 These vectors capture visual style, texture, shape of each outfit.
 Stored in MongoDB and used for real cosine similarity scoring.
+
+FIX NOTES:
+- SLEEVE_MAP corrected: t-shirt → "short", shirt → "long", longsleeve → "long"
+  dress/skirt/pants/shorts/hat/shoes → "sleeveless" (no arm coverage)
+- OCCASION_MAP: outwear → "casual" (was already correct)
+- Re-run this script after fixing to re-populate MongoDB with correct sleeve values.
 """
 
 import os
@@ -24,11 +30,10 @@ BASE_FOLDER = "outfit_images"
 print("Loading MobileNet model...")
 try:
     import tensorflow as tf
-    # MobileNetV2 pretrained on ImageNet - extracts 1280-dim feature vector
     base_model = tf.keras.applications.MobileNetV2(
         weights="imagenet",
-        include_top=False,   # remove classification head
-        pooling="avg",       # global average pooling → (1, 1280)
+        include_top=False,
+        pooling="avg",
         input_shape=(224, 224, 3)
     )
     base_model.trainable = False
@@ -42,79 +47,51 @@ except Exception as e:
 
 # ── Feature extraction ────────────────────────────────────────────────────────
 def extract_mobilenet_features(image_path: str) -> list:
-    """
-    Extract 1280-dimensional feature vector using MobileNetV2.
-    This vector encodes the visual appearance of the outfit.
-    """
     try:
         img = cv2.imread(image_path)
         if img is None:
             return []
-
-        # Resize to MobileNet input size
         img = cv2.resize(img, (224, 224))
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-        # Preprocess for MobileNetV2
         img = tf.keras.applications.mobilenet_v2.preprocess_input(img)
-        img = np.expand_dims(img, axis=0)  # (1, 224, 224, 3)
-
-        # Extract features
-        features = base_model.predict(img, verbose=0)  # (1, 1280)
-        features = features.flatten()                   # (1280,)
-
-        # Normalize to unit vector (important for cosine similarity)
+        img = np.expand_dims(img, axis=0)
+        features = base_model.predict(img, verbose=0).flatten()
         norm = np.linalg.norm(features)
         if norm > 0:
             features = features / norm
-
         return features.tolist()
-
     except Exception as e:
         print(f"   ⚠️  Feature extraction error: {e}")
         return []
 
 
 def extract_color_histogram_features(image_path: str) -> list:
-    """
-    Fallback: Extract color histogram as feature vector (96 dims).
-    Less accurate than MobileNet but works without TensorFlow.
-    """
     try:
         img = cv2.imread(image_path)
         if img is None:
             return []
-
         img = cv2.resize(img, (100, 100))
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-
-        # 32-bin histogram per channel = 96 total features
         h_hist = cv2.calcHist([hsv], [0], None, [32], [0, 180]).flatten()
         s_hist = cv2.calcHist([hsv], [1], None, [32], [0, 256]).flatten()
         v_hist = cv2.calcHist([hsv], [2], None, [32], [0, 256]).flatten()
-
         features = np.concatenate([h_hist, s_hist, v_hist])
-
-        # Normalize
         norm = np.linalg.norm(features)
         if norm > 0:
             features = features / norm
-
         return features.tolist()
-
     except Exception as e:
         print(f"   ⚠️  Histogram error: {e}")
         return []
 
 
 def extract_features(image_path: str) -> list:
-    """Use MobileNet if available, else color histogram"""
     if USE_MOBILENET:
         return extract_mobilenet_features(image_path)
     return extract_color_histogram_features(image_path)
 
 
-# ── Color detection from pixels ───────────────────────────────────────────────
+# ── Color detection ───────────────────────────────────────────────────────────
 COLOR_RANGES = [
     ("red",    0,   10),
     ("orange", 11,  20),
@@ -131,53 +108,68 @@ def detect_color_from_image(image_path: str) -> str:
         img = cv2.imread(image_path)
         if img is None:
             return "multi"
-
         img = cv2.resize(img, (100, 100))
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-
         s = hsv[:, :, 1]
         v = hsv[:, :, 2]
-
         mask = (s > 40) & (v > 40) & (v < 240)
-
         if np.sum(mask) < 50:
             mean_v = float(np.mean(v))
             if mean_v > 180:   return "white"
             elif mean_v < 60:  return "black"
             else:              return "grey"
-
-        hues    = hsv[:, :, 0][mask]
-        mean_h  = float(np.mean(hues))
-        mean_s  = float(np.mean(s[mask]))
-
+        hues   = hsv[:, :, 0][mask]
+        mean_h = float(np.mean(hues))
+        mean_s = float(np.mean(s[mask]))
         if mean_s < 30:
             mean_v = float(np.mean(v))
             if mean_v > 170:  return "white"
             elif mean_v < 70: return "black"
             return "grey"
-
         if mean_s < 80 and 10 <= mean_h <= 25:
             return "brown"
-
         for color_name, hue_min, hue_max in COLOR_RANGES:
             if hue_min <= mean_h <= hue_max:
                 return color_name
-
         return "multi"
     except:
         return "multi"
 
 
-# ── Category → sleeve / occasion ─────────────────────────────────────────────
-SLEEVE_MAP  = {
-    "dress": "sleeveless", "t-shirt": "short", "shirt": "long",
-    "longsleeve": "long",  "outwear": "long",  "pants": "sleeveless",
-    "shorts": "sleeveless","skirt": "sleeveless","hat": "sleeveless","shoes": "sleeveless",
+# ── FIXED: Category → sleeve / occasion ──────────────────────────────────────
+#
+# SLEEVE_MAP rules:
+#   "short"      → t-shirt (has sleeves but they're short)
+#   "long"       → shirt (button-up, typically long), longsleeve, outwear
+#   "sleeveless" → dress, skirt, pants, shorts, hat, shoes
+#                  (these items either have no sleeves or are not tops)
+#
+# WHY THIS MATTERS: The sleeve filter in React does an exact string match.
+# If a t-shirt is stored as "sleeveless", filtering "short" will never find it.
+#
+SLEEVE_MAP = {
+    "t-shirt":   "short",       # ✅ FIXED: was missing, defaulted to wrong value
+    "shirt":     "long",        # button-up shirts are typically long-sleeved
+    "longsleeve":"long",        # explicitly long
+    "outwear":   "long",        # jackets/coats are long
+    "dress":     "sleeveless",  # dresses don't have arm sleeves as a category
+    "skirt":     "sleeveless",  # bottom-wear
+    "pants":     "sleeveless",  # bottom-wear
+    "shorts":    "sleeveless",  # bottom-wear
+    "hat":       "sleeveless",  # accessory
+    "shoes":     "sleeveless",  # accessory
 }
+
 OCCASION_MAP = {
-    "dress": "party",   "skirt": "casual",  "pants": "casual",
-    "shorts": "casual", "shirt": "formal",  "t-shirt": "casual",
-    "longsleeve": "casual","outwear": "casual","hat": "casual","shoes": "casual",
+    "dress":      "party",
+    "skirt":      "casual",
+    "pants":      "formal",
+    "shorts":     "casual",
+    "shirt":      "formal",
+    "t-shirt":    "casual",
+    "longsleeve": "casual",
+   
+   
 }
 
 
@@ -203,24 +195,24 @@ def process_images():
             image_path = os.path.join(cat_path, file)
             print(f"   [{i+1}/{len(files)}] {file[:40]}", end=" ... ")
 
-            # ── Extract feature vector (THE KEY STEP) ──────────────────────
             features = extract_features(image_path)
-
-            # ── Detect attributes ───────────────────────────────────────────
             color    = detect_color_from_image(image_path)
-            sleeves  = SLEEVE_MAP.get(category.lower(), "short")
-            occasion = OCCASION_MAP.get(category.lower(), "casual")
 
-            print(f"color={color}, features={len(features)} dims")
+            # Use SLEEVE_MAP with fallback to "short" for any unknown top categories
+            cat_lower = category.lower().strip()
+            sleeves  = SLEEVE_MAP.get(cat_lower, "short")
+            occasion = OCCASION_MAP.get(cat_lower, "casual")
+
+            print(f"color={color}, sleeves={sleeves}, features={len(features)} dims")
 
             outfits.append({
                 "name":       file.split(".")[0],
-                "category":   category.lower().strip(),
+                "category":   cat_lower,
                 "image_path": f"{category}/{file}",
                 "color":      color,
                 "sleeves":    sleeves,
                 "occasion":   occasion,
-                "features":   features,   # ← 1280-dim MobileNet vector
+                "features":   features,
             })
 
     print(f"\n📊 Total: {len(outfits)} outfits processed")
@@ -244,6 +236,7 @@ def process_images():
     print(f"   Colors:     {dict(Counter(o['color']    for o in outfits))}")
     print(f"   Occasions:  {dict(Counter(o['occasion'] for o in outfits))}")
     print(f"   Categories: {dict(Counter(o['category'] for o in outfits))}")
+    print(f"   Sleeves:    {dict(Counter(o['sleeves']  for o in outfits))}")
     print(f"   Feature dim: {len(outfits[0]['features'])} per outfit")
 
 

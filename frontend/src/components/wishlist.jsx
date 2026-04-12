@@ -4,6 +4,28 @@ import { motion } from "framer-motion";
 import { Trash2, Heart, ShoppingBag, ArrowLeft } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
+// ── Image component with fallback ─────────────────────────────────────────────
+function WishlistImage({ imageId }) {
+  const [error, setError] = useState(false);
+
+  if (!imageId || error) {
+    return (
+      <div className="w-full h-full flex items-center justify-center text-6xl bg-gradient-to-br from-pink-200 via-rose-200 to-red-200">
+        👗
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={`http://127.0.0.1:8000/user/image-file/${imageId}`}
+      alt="saved outfit"
+      className="w-full h-full object-contain"
+      onError={() => setError(true)}
+    />
+  );
+}
+
 export default function WishlistPage() {
   const navigate = useNavigate();
   const [wishlistItems, setWishlistItems] = useState([]);
@@ -233,19 +255,17 @@ export default function WishlistPage() {
                 className="group bg-white rounded-2xl overflow-hidden shadow-lg hover:shadow-2xl transition-all"
               >
                 {/* Image */}
-                <div className="relative h-56 bg-gradient-to-br from-pink-200 via-rose-200 to-red-200 overflow-hidden flex items-center justify-center">
-                  <div className="text-6xl group-hover:scale-110 transition-transform">
-                    👗
-                  </div>
+                <div className="relative h-56 bg-gray-100 overflow-hidden flex items-center justify-center">
+                  <WishlistImage imageId={item.image_id} />
 
                   {/* Heart Badge */}
-                  <div className="absolute top-3 right-3 bg-white rounded-full w-10 h-10 flex items-center justify-center shadow-lg">
+                  <div className="absolute top-3 right-3 bg-white rounded-full w-10 h-10 flex items-center justify-center shadow-lg z-10">
                     <Heart className="w-6 h-6 text-red-500 fill-red-500" />
                   </div>
 
                   {/* Match Badge */}
                   {item.similarity_score && (
-                    <div className="absolute top-3 left-3 bg-gradient-to-r from-green-400 to-emerald-500 text-white px-3 py-1 rounded-full font-bold text-sm shadow-lg">
+                    <div className="absolute top-3 left-3 bg-gradient-to-r from-green-400 to-emerald-500 text-white px-3 py-1 rounded-full font-bold text-sm shadow-lg z-10">
                       {Math.round(item.similarity_score * 100)}%
                     </div>
                   )}

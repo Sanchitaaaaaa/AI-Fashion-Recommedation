@@ -2,13 +2,13 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import axios from "axios";
 import { motion, AnimatePresence } from "framer-motion";
-import { Loader, Heart, ShoppingBag, ArrowLeft, ChevronDown, X } from "lucide-react";
+import { Loader, Heart, ShoppingBag, ArrowLeft, ChevronDown, X, AlertTriangle, CheckCircle } from "lucide-react";
 
 // ── Filter options ────────────────────────────────────────────────────────────
-const COLOR_OPTIONS    = ["All Colors",    "red", "blue", "black", "white", "green", "yellow", "pink", "brown", "grey", "purple", "orange", "multi"];
-const SLEEVE_OPTIONS   = ["All Sleeves",   "long", "short", "sleeveless"];
+const COLOR_OPTIONS    = ["All Colors", "red", "blue", "black", "white", "green", "yellow", "pink", "brown", "grey", "purple", "orange", "multi"];
+const SLEEVE_OPTIONS   = ["All Sleeves", "long", "short", "sleeveless"];
 const OCCASION_OPTIONS = ["All Occasions", "casual", "party", "formal"];
-const CATEGORY_OPTIONS = ["All Categories","dress", "longsleeve",  "pants", "shirt", "shorts", "skirt", "t-shirt"];
+const CATEGORY_OPTIONS = ["All Categories", "dress", "pants", "shirt", "shorts", "skirt", "t-shirt"];
 
 const INITIAL_FILTERS = {
   color:    "All Colors",
@@ -19,51 +19,55 @@ const INITIAL_FILTERS = {
 
 const isDefault = (key, value) => value === INITIAL_FILTERS[key];
 
-// ── Apply ALL 4 filters together ─────────────────────────────────────────────
+// ── Skin tone → suitable colors map ──────────────────────────────────────────
+const SKIN_TONE_COLORS = {
+  Fair:    ["blue", "pink", "purple", "red", "green", "black", "white", "grey"],
+  Medium:  ["red", "blue", "green", "yellow", "brown", "white", "black", "orange"],
+  Tan:     ["white", "yellow", "orange", "red", "green", "blue", "brown", "multi"],
+  Deep:    ["white", "yellow", "red", "orange", "green", "blue", "multi", "pink"],
+};
+
+function isColorSuitable(color, skinTone) {
+  if (!color || !skinTone) return true;
+  const suitable = SKIN_TONE_COLORS[skinTone];
+  if (!suitable) return true;
+  return suitable.includes(color.toLowerCase().trim());
+}
+
 function applyFilters(items, filters) {
   return items.filter((item) => {
-    // COLOR filter
     if (!isDefault("color", filters.color)) {
-      const itemColor = (item.color || "").toLowerCase().trim();
-      const target    = filters.color.toLowerCase().trim();
-      if (itemColor !== target) return false;
+      if ((item.color || "").toLowerCase().trim() !== filters.color.toLowerCase().trim()) return false;
     }
-
-    // SLEEVE filter
     if (!isDefault("sleeve", filters.sleeve)) {
-      const itemSleeve = (item.sleeves || "").toLowerCase().trim();
-      const target     = filters.sleeve.toLowerCase().trim();
-      if (itemSleeve !== target) return false;
+      if ((item.sleeves || "").toLowerCase().trim() !== filters.sleeve.toLowerCase().trim()) return false;
     }
-
-    // OCCASION filter
     if (!isDefault("occasion", filters.occasion)) {
-      const itemOccasion = (item.occasion || "").toLowerCase().trim();
-      const target       = filters.occasion.toLowerCase().trim();
-      if (itemOccasion !== target) return false;
+      if ((item.occasion || "").toLowerCase().trim() !== filters.occasion.toLowerCase().trim()) return false;
     }
-
-    // CATEGORY filter
     if (!isDefault("category", filters.category)) {
-      const itemCategory = (item.category || "").toLowerCase().trim();
-      const target       = filters.category.toLowerCase().trim();
-      if (itemCategory !== target) return false;
+      if ((item.category || "").toLowerCase().trim() !== filters.category.toLowerCase().trim()) return false;
     }
-
     return true;
   });
 }
 
-// ── Color dot component ───────────────────────────────────────────────────────
 const COLOR_DOT_MAP = {
-  red: "bg-red-500", blue: "bg-blue-500", black: "bg-gray-900",
-  white: "bg-gray-100 border border-gray-300", green: "bg-green-500",
-  yellow: "bg-yellow-400", pink: "bg-pink-400", brown: "bg-amber-700",
-  grey: "bg-gray-400", purple: "bg-purple-500", orange: "bg-orange-500",
-  multi: "bg-gradient-to-r from-pink-400 via-yellow-400 to-blue-400",
+  red:    "bg-red-500",
+  blue:   "bg-blue-500",
+  black:  "bg-gray-900",
+  white:  "bg-gray-100 border border-gray-300",
+  green:  "bg-green-500",
+  yellow: "bg-yellow-400",
+  pink:   "bg-pink-400",
+  brown:  "bg-amber-700",
+  grey:   "bg-gray-400",
+  purple: "bg-purple-500",
+  orange: "bg-orange-500",
+  multi:  "bg-gradient-to-r from-pink-400 via-yellow-400 to-blue-400",
 };
 
-// ── Lazy image component ──────────────────────────────────────────────────────
+// ── Lazy image ────────────────────────────────────────────────────────────────
 function OutfitImage({ src, alt }) {
   const [loaded, setLoaded] = useState(false);
   const [error,  setError]  = useState(false);
@@ -96,17 +100,20 @@ function OutfitImage({ src, alt }) {
   );
 }
 
-// ── Dropdown component ────────────────────────────────────────────────────────
-function FilterDropdown({ id, emoji, label, options, value, onChange, openDropdown, setOpenDropdown }) {
-  const isOpen    = openDropdown === id;
-  const isActive  = !isDefault(id === "sleeve" ? "sleeve" : id, value);
+// ── Dropdown ──────────────────────────────────────────────────────────────────
+function FilterDropdown({ id, emoji, options, value, onChange, openDropdown, setOpenDropdown, skinTone }) {
+  const isOpen   = openDropdown === id;
+  const isActive = !isDefault(id === "sleeve" ? "sleeve" : id, value);
+  const selectedColorUnsafe = id === "color" && !isDefault("color", value) && !isColorSuitable(value, skinTone);
 
   return (
     <div className="relative">
       <button
         onClick={(e) => { e.stopPropagation(); setOpenDropdown(isOpen ? null : id); }}
         className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl transition-all font-semibold text-sm border-2 ${
-          isActive
+          selectedColorUnsafe
+            ? "bg-red-50 border-red-300 text-red-700"
+            : isActive
             ? "bg-purple-50 border-purple-400 text-purple-800"
             : "bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100"
         }`}
@@ -114,9 +121,16 @@ function FilterDropdown({ id, emoji, label, options, value, onChange, openDropdo
         <span className="flex items-center gap-2 truncate">
           <span>{emoji}</span>
           <span className="truncate">{value}</span>
+          {selectedColorUnsafe && <AlertTriangle className="w-3.5 h-3.5 text-red-500 flex-shrink-0" />}
         </span>
         <ChevronDown className={`w-4 h-4 flex-shrink-0 transition-transform ${isOpen ? "rotate-180" : ""}`} />
       </button>
+
+      {selectedColorUnsafe && (
+        <p className="text-xs text-red-500 mt-1 px-1 font-medium">
+          Not ideal for your {skinTone} skin tone
+        </p>
+      )}
 
       <AnimatePresence>
         {isOpen && (
@@ -130,19 +144,29 @@ function FilterDropdown({ id, emoji, label, options, value, onChange, openDropdo
             onClick={(e) => e.stopPropagation()}
           >
             {options.map((option) => {
-              const dotClass = id === "color" ? COLOR_DOT_MAP[option] : null;
+              const dotClass   = id === "color" ? COLOR_DOT_MAP[option] : null;
+              const isUnsafe   = id === "color" && option !== "All Colors" && !isColorSuitable(option, skinTone);
+              const isSelected = value === option;
+
               return (
                 <button
                   key={option}
                   onClick={() => { onChange(id, option); setOpenDropdown(null); }}
-                  className={`w-full text-left px-3 py-2.5 text-sm flex items-center gap-2 transition-colors hover:bg-purple-50 ${
-                    value === option ? "bg-purple-100 font-bold text-purple-800" : "text-gray-700"
+                  className={`w-full text-left px-3 py-2.5 text-sm flex items-center gap-2 transition-colors ${
+                    isSelected
+                      ? "bg-purple-100 font-bold text-purple-800"
+                      : isUnsafe
+                      ? "hover:bg-red-50 text-gray-700"
+                      : "hover:bg-purple-50 text-gray-700"
                   }`}
                 >
-                  {dotClass && (
-                    <span className={`w-3 h-3 rounded-full flex-shrink-0 ${dotClass}`} />
+                  {dotClass && <span className={`w-3 h-3 rounded-full flex-shrink-0 ${dotClass}`} />}
+                  <span className="capitalize flex-1">{option}</span>
+                  {isUnsafe && (
+                    <span className="text-xs text-red-400 font-medium flex items-center gap-0.5">
+                      <AlertTriangle className="w-3 h-3" /> not ideal
+                    </span>
                   )}
-                  <span className="capitalize">{option}</span>
                 </button>
               );
             })}
@@ -163,11 +187,14 @@ export default function RecommendationsPage() {
   const [recommendations, setRecommendations] = useState([]);
   const [loading,         setLoading]         = useState(false);
   const [error,           setError]           = useState(null);
-  const [wishlist,        setWishlist]        = useState([]);
+  // wishlist is now a Set of outfit_names that are saved in backend
+  const [wishlist,        setWishlist]        = useState(new Set());
+  const [wishlistLoading, setWishlistLoading] = useState(new Set()); // tracks which cards are mid-request
+  const [toast,           setToast]           = useState(null); // { message, type: "success"|"error" }
   const [openDropdown,    setOpenDropdown]    = useState(null);
   const [filters,         setFilters]         = useState(INITIAL_FILTERS);
 
-  // ── Load state ───────────────────────────────────────────────────────────
+  // ── Load state from navigation ────────────────────────────────────────────
   useEffect(() => {
     if (location.state) {
       setSelectedImageId(location.state.selectedImageId);
@@ -175,11 +202,35 @@ export default function RecommendationsPage() {
     }
   }, [location.state]);
 
-  // ── Fetch recommendations (body type + skin tone pre-filter) ─────────────
+  // ── Fetch existing wishlist from backend on mount ─────────────────────────
+  useEffect(() => {
+    const fetchWishlist = async () => {
+      try {
+        const res = await axios.get("http://127.0.0.1:8000/wishlist/get", {
+          params: { user_id: "default_user" },
+        });
+        if (res.data.success) {
+          const names = new Set((res.data.items || []).map((i) => i.outfit_name));
+          setWishlist(names);
+        }
+      } catch (err) {
+        console.error("Could not fetch wishlist:", err);
+      }
+    };
+    fetchWishlist();
+  }, []);
+
+  // ── Show toast helper ─────────────────────────────────────────────────────
+  const showToast = useCallback((message, type = "success") => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 2500);
+  }, []);
+
+  // ── Fetch recommendations ─────────────────────────────────────────────────
   useEffect(() => {
     if (!selectedImageId || !selectedDetails) return;
 
-    const fetch = async () => {
+    const fetchRecs = async () => {
       setLoading(true);
       setError(null);
       setFilters(INITIAL_FILTERS);
@@ -192,17 +243,7 @@ export default function RecommendationsPage() {
         });
 
         if (res.data.success) {
-          const recs = res.data.recommendations || [];
-          console.log("✅ Received", recs.length, "recommendations");
-
-          // Debug log
-          const colors    = [...new Set(recs.map(r => r.color))];
-          const occasions = [...new Set(recs.map(r => r.occasion))];
-          const cats      = [...new Set(recs.map(r => r.category))];
-          const sleeves   = [...new Set(recs.map(r => r.sleeves))];
-          console.log("Colors:", colors, "| Occasions:", occasions, "| Categories:", cats, "| Sleeves:", sleeves);
-
-          setRecommendations(recs);
+          setRecommendations(res.data.recommendations || []);
         } else {
           setError(res.data.error || "Failed to generate recommendations");
         }
@@ -214,10 +255,10 @@ export default function RecommendationsPage() {
       }
     };
 
-    fetch();
+    fetchRecs();
   }, [selectedImageId, selectedDetails]);
 
-  // ── Apply all 4 filters (memoized) ───────────────────────────────────────
+  // ── Apply filters (memoized) ──────────────────────────────────────────────
   const filtered = useMemo(
     () => applyFilters(recommendations, filters),
     [filters, recommendations]
@@ -233,13 +274,60 @@ export default function RecommendationsPage() {
     setOpenDropdown(null);
   }, []);
 
-  const toggleWishlist = useCallback((outfit) => {
-    setWishlist((prev) =>
-      prev.find((i) => i.rank === outfit.rank)
-        ? prev.filter((i) => i.rank !== outfit.rank)
-        : [...prev, outfit]
-    );
-  }, []);
+  // ── Toggle wishlist: calls backend, updates local Set ────────────────────
+  const toggleWishlist = useCallback(async (outfit) => {
+    const name = outfit.outfit_name;
+
+    // Prevent double-click while request is in flight
+    if (wishlistLoading.has(name)) return;
+
+    setWishlistLoading((prev) => new Set(prev).add(name));
+
+    const alreadySaved = wishlist.has(name);
+
+    // Optimistic UI update
+    setWishlist((prev) => {
+      const next = new Set(prev);
+      alreadySaved ? next.delete(name) : next.add(name);
+      return next;
+    });
+
+    try {
+      if (alreadySaved) {
+        // Remove from wishlist
+        await axios.post("http://127.0.0.1:8000/wishlist/remove", {
+          user_id:     "default_user",
+          outfit_name: name,
+        });
+        showToast("Removed from wishlist", "error");
+      } else {
+        // Add to wishlist
+        await axios.post("http://127.0.0.1:8000/wishlist/add", {
+          user_id:          "default_user",
+          outfit_name:      name,
+          similarity_score: outfit.similarity_score || 0,
+          image_id:         selectedImageId,
+          occasion:         outfit.occasion || "",
+        });
+        showToast("Saved to wishlist ❤️", "success");
+      }
+    } catch (err) {
+      console.error("Wishlist error:", err);
+      // Revert optimistic update on failure
+      setWishlist((prev) => {
+        const next = new Set(prev);
+        alreadySaved ? next.add(name) : next.delete(name);
+        return next;
+      });
+      showToast("Something went wrong. Try again.", "error");
+    } finally {
+      setWishlistLoading((prev) => {
+        const next = new Set(prev);
+        next.delete(name);
+        return next;
+      });
+    }
+  }, [wishlist, wishlistLoading, selectedImageId, showToast]);
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -249,8 +337,9 @@ export default function RecommendationsPage() {
   }, []);
 
   const activeFilterCount = Object.entries(filters).filter(([k, v]) => !isDefault(k, v)).length;
+  const skinTone = selectedDetails?.skin_tone || null;
 
-  // ── Guard ────────────────────────────────────────────────────────────────
+  // ── Guard ─────────────────────────────────────────────────────────────────
   if (!selectedImageId || !selectedDetails) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50 flex items-center justify-center p-6">
@@ -270,9 +359,32 @@ export default function RecommendationsPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50">
+
+      {/* ── Toast notification ────────────────────────────────────────────── */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: -40 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -40 }}
+            className={`fixed top-5 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-5 py-3 rounded-full shadow-xl font-semibold text-sm ${
+              toast.type === "success"
+                ? "bg-white text-gray-800 border border-green-200"
+                : "bg-white text-gray-800 border border-red-200"
+            }`}
+          >
+            {toast.type === "success"
+              ? <CheckCircle className="w-4 h-4 text-green-500" />
+              : <Heart className="w-4 h-4 text-red-400" />
+            }
+            {toast.message}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <div className="relative z-10 px-4 sm:px-6 py-8 max-w-7xl mx-auto">
 
-        {/* ── Header ─────────────────────────────────────────────────────── */}
+        {/* ── Header ───────────────────────────────────────────────────────── */}
         <div className="mb-6">
           <div className="flex items-center gap-4 mb-6">
             <motion.button
@@ -287,10 +399,28 @@ export default function RecommendationsPage() {
                 👗 Your Recommendations
               </h1>
               <p className="text-sm text-gray-500 mt-0.5">
-                Based on your <span className="font-semibold text-purple-600">{selectedDetails.body_type}</span> body type
-                &amp; <span className="font-semibold text-pink-600">{selectedDetails.skin_tone}</span> skin tone
+                Based on your{" "}
+                <span className="font-semibold text-purple-600">{selectedDetails.body_type}</span>{" "}
+                body type &amp;{" "}
+                <span className="font-semibold text-pink-600">{selectedDetails.skin_tone}</span>{" "}
+                skin tone
               </p>
             </div>
+
+            {/* Wishlist shortcut */}
+            <motion.button
+              whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
+              onClick={() => navigate("/wishlist")}
+              className="ml-auto flex items-center gap-2 px-4 py-2 bg-white rounded-xl shadow-md text-sm font-semibold text-red-500 hover:bg-red-50 transition-colors"
+            >
+              <Heart className="w-4 h-4 fill-red-500" />
+              Wishlist
+              {wishlist.size > 0 && (
+                <span className="bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                  {wishlist.size}
+                </span>
+              )}
+            </motion.button>
           </div>
 
           {/* Stats row */}
@@ -312,7 +442,7 @@ export default function RecommendationsPage() {
             </div>
           </div>
 
-          {/* ── Filter Panel ──────────────────────────────────────────────── */}
+          {/* ── Filter Panel ─────────────────────────────────────────────────── */}
           <div
             className="bg-white rounded-2xl shadow-sm p-4 mb-6 border border-gray-100"
             onClick={(e) => e.stopPropagation()}
@@ -342,28 +472,31 @@ export default function RecommendationsPage() {
                 options={COLOR_OPTIONS} value={filters.color}
                 onChange={handleFilterChange}
                 openDropdown={openDropdown} setOpenDropdown={setOpenDropdown}
+                skinTone={skinTone}
               />
               <FilterDropdown
                 id="sleeve" emoji="👕" label="Sleeve"
                 options={SLEEVE_OPTIONS} value={filters.sleeve}
                 onChange={handleFilterChange}
                 openDropdown={openDropdown} setOpenDropdown={setOpenDropdown}
+                skinTone={skinTone}
               />
               <FilterDropdown
                 id="occasion" emoji="🎉" label="Occasion"
                 options={OCCASION_OPTIONS} value={filters.occasion}
                 onChange={handleFilterChange}
                 openDropdown={openDropdown} setOpenDropdown={setOpenDropdown}
+                skinTone={skinTone}
               />
               <FilterDropdown
                 id="category" emoji="👗" label="Category"
                 options={CATEGORY_OPTIONS} value={filters.category}
                 onChange={handleFilterChange}
                 openDropdown={openDropdown} setOpenDropdown={setOpenDropdown}
+                skinTone={skinTone}
               />
             </div>
 
-            {/* Active filter chips */}
             {activeFilterCount > 0 && (
               <div className="flex flex-wrap gap-1.5 mt-3 pt-3 border-t border-gray-100">
                 {Object.entries(filters).map(([key, value]) =>
@@ -384,7 +517,7 @@ export default function RecommendationsPage() {
           </div>
         </div>
 
-        {/* ── Loading ───────────────────────────────────────────────────── */}
+        {/* ── Loading ───────────────────────────────────────────────────────── */}
         {loading && (
           <div className="flex items-center justify-center py-20">
             <Loader className="w-10 h-10 text-purple-500 animate-spin mr-3" />
@@ -392,14 +525,14 @@ export default function RecommendationsPage() {
           </div>
         )}
 
-        {/* ── Error ─────────────────────────────────────────────────────── */}
+        {/* ── Error ─────────────────────────────────────────────────────────── */}
         {error && !loading && (
           <div className="bg-red-50 border border-red-200 text-red-700 px-5 py-4 rounded-xl mb-6 text-sm">
             ⚠️ {error}
           </div>
         )}
 
-        {/* ── Grid ──────────────────────────────────────────────────────── */}
+        {/* ── Grid ──────────────────────────────────────────────────────────── */}
         {!loading && !error && filtered.length > 0 && (
           <motion.div
             layout
@@ -407,8 +540,10 @@ export default function RecommendationsPage() {
           >
             <AnimatePresence mode="popLayout">
               {filtered.map((outfit, index) => {
-                const inWishlist = wishlist.some((i) => i.rank === outfit.rank);
-                const dotClass   = COLOR_DOT_MAP[outfit.color] || "bg-gray-300";
+                const inWishlist   = wishlist.has(outfit.outfit_name);
+                const isProcessing = wishlistLoading.has(outfit.outfit_name);
+                const dotClass     = COLOR_DOT_MAP[outfit.color] || "bg-gray-300";
+                const colorUnsafe  = !isColorSuitable(outfit.color, skinTone);
 
                 return (
                   <motion.div
@@ -435,16 +570,34 @@ export default function RecommendationsPage() {
                         {outfit.similarity_percentage}
                       </div>
 
-                      {/* Wishlist button */}
+                      {/* Skin tone warning banner */}
+                      {colorUnsafe && (
+                        <div className="absolute bottom-0 left-0 right-0 bg-red-500/90 text-white px-2 py-1 flex items-center gap-1">
+                          <AlertTriangle className="w-3 h-3 flex-shrink-0" />
+                          <span className="text-xs font-semibold truncate">
+                            Not ideal for {skinTone} skin
+                          </span>
+                        </div>
+                      )}
+
+                      {/* ── Heart / Wishlist button ──────────────────────── */}
                       <button
                         onClick={() => toggleWishlist(outfit)}
-                        className={`absolute bottom-2 right-2 rounded-full p-2 shadow-md transition-all ${
-                          inWishlist
+                        disabled={isProcessing}
+                        className={`absolute right-2 rounded-full p-2 shadow-md transition-all ${
+                          colorUnsafe ? "bottom-8" : "bottom-2"
+                        } ${
+                          isProcessing
+                            ? "bg-gray-100 text-gray-400 cursor-wait"
+                            : inWishlist
                             ? "bg-red-500 text-white scale-110"
                             : "bg-white/90 text-red-400 hover:bg-red-50"
                         }`}
                       >
-                        <Heart className={`w-4 h-4 ${inWishlist ? "fill-current" : ""}`} />
+                        {isProcessing
+                          ? <Loader className="w-4 h-4 animate-spin" />
+                          : <Heart className={`w-4 h-4 ${inWishlist ? "fill-current" : ""}`} />
+                        }
                       </button>
                     </div>
 
@@ -452,7 +605,6 @@ export default function RecommendationsPage() {
                     <div className="p-3">
                       <h3 className="font-bold text-gray-900 text-xs mb-2 truncate">{outfit.outfit_name}</h3>
 
-                      {/* Attribute badges */}
                       <div className="flex flex-wrap gap-1 mb-2">
                         {outfit.category && (
                           <span className="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full capitalize font-medium">
@@ -469,7 +621,6 @@ export default function RecommendationsPage() {
                             {outfit.sleeves}
                           </span>
                         )}
-                        {/* Color dot */}
                         {outfit.color && (
                           <span className="flex items-center gap-1 text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-full font-medium">
                             <span className={`w-2.5 h-2.5 rounded-full ${dotClass}`} />
@@ -478,7 +629,15 @@ export default function RecommendationsPage() {
                         )}
                       </div>
 
-                      {/* Match bar */}
+                      {colorUnsafe && (
+                        <div className="flex items-center gap-1 mb-2 px-1.5 py-1 bg-red-50 border border-red-200 rounded-lg">
+                          <AlertTriangle className="w-3 h-3 text-red-500 flex-shrink-0" />
+                          <span className="text-xs text-red-600 font-medium">
+                            Not ideal for your skin tone
+                          </span>
+                        </div>
+                      )}
+
                       <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
                         <motion.div
                           initial={{ width: 0 }}
@@ -495,7 +654,7 @@ export default function RecommendationsPage() {
           </motion.div>
         )}
 
-        {/* ── No filter matches ─────────────────────────────────────────── */}
+        {/* ── No filter matches ─────────────────────────────────────────────── */}
         {!loading && !error && filtered.length === 0 && recommendations.length > 0 && (
           <div className="text-center py-20">
             <ShoppingBag className="w-14 h-14 text-gray-200 mx-auto mb-4" />
@@ -512,7 +671,7 @@ export default function RecommendationsPage() {
           </div>
         )}
 
-        {/* ── No recommendations ────────────────────────────────────────── */}
+        {/* ── No recommendations ────────────────────────────────────────────── */}
         {!loading && !error && recommendations.length === 0 && (
           <div className="text-center py-20">
             <ShoppingBag className="w-14 h-14 text-gray-200 mx-auto mb-4" />

@@ -165,9 +165,9 @@ export default function UserDetails() {
                       }`}
                     >
                       <img
-                        src={`data:image/jpeg;base64,${image.image_data || ""}`}
+                        src={`http://127.0.0.1:8000/user/image-file/${image.image_id}`}
                         alt="uploaded"
-                        className="w-full h-32 object-cover"
+                        className="w-full h-32 object-contain bg-gray-100"
                         onError={(e) => {
                           e.target.src =
                             "https://via.placeholder.com/200/cccccc/ffffff?text=Image";
@@ -222,12 +222,9 @@ export default function UserDetails() {
                     className="bg-white rounded-2xl shadow-lg overflow-hidden border-4 border-purple-200"
                   >
                     <img
-                      src={`data:image/jpeg;base64,${
-                        uploadedImages.find((img) => img.image_id === selectedImageId)
-                          ?.image_data || ""
-                      }`}
+                      src={`http://127.0.0.1:8000/user/image-file/${selectedImageId}`}
                       alt="selected"
-                      className="w-full h-96 object-cover"
+                      className="w-full max-h-[500px] object-contain bg-gray-100"
                       onError={(e) => {
                         e.target.src =
                           "https://via.placeholder.com/400/cccccc/ffffff?text=Image";
