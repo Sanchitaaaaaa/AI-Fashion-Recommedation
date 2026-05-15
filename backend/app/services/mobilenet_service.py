@@ -1,243 +1,460 @@
 """
-Outfit Processor - Extracts REAL MobileNet feature vectors from images
-These vectors capture visual style, texture, shape of each outfit.
-Stored in MongoDB and used for real cosine similarity scoring.
+MobileNet Fashion Feature Extractor  v3.0
+──────────────────────────────────────────
+Processes filtered_images, extracts MobileNetV2 features (1280-d),
+and inserts/updates MongoDB with strict filters aligned to dataset_filter.py.
 
-FIX NOTES:
-- SLEEVE_MAP corrected: t-shirt → "short", shirt → "long", longsleeve → "long"
-  dress/skirt/pants/shorts/hat/shoes → "sleeveless" (no arm coverage)
-- OCCASION_MAP: outwear → "casual" (was already correct)
-- Re-run this script after fixing to re-populate MongoDB with correct sleeve values.
+Category display groups:
+  MEN   : Tshirts, Shirts, Kurtas, Hoodies, Jeans, Trousers, Shorts,
+           Gymwear, Blazers, Jackets
+  WOMEN : Shirts, Tshirts, Tops, Kurti, Suit Sets, Jeans, Trousers,
+           Shorts, Skirts, Gymwear, Dresses, Jackets, Hoodies
+
+Run this INSTEAD OF bulk_insert_outfits.py when you want real AI
+feature vectors (not placeholder zeros).
 """
 
 import os
+import cv2
+import certifi
 import numpy as np
+import pandas as pd
+
 from pymongo import MongoClient
 from dotenv import load_dotenv
-import certifi
-import cv2
 
 load_dotenv()
 
-MONGO_URI   = os.getenv("MONGO_URL")
-client      = MongoClient(MONGO_URI, serverSelectionTimeoutMS=10000, tlsCAFile=certifi.where())
-db          = client["ai_fashion"]
-collection  = db["outfits"]
+# ═══════════════════════════════════════════════════════════════
+# MONGODB
+# ═══════════════════════════════════════════════════════════════
 
-BASE_FOLDER = "outfit_images"
+MONGO_URI = os.getenv("MONGO_URL")
 
-# ── Load MobileNet ────────────────────────────────────────────────────────────
-print("Loading MobileNet model...")
+client = MongoClient(
+    MONGO_URI,
+    serverSelectionTimeoutMS=10000,
+    tlsCAFile=certifi.where(),
+)
+db         = client["ai_fashion"]
+collection = db["outfits"]
+
+# ═══════════════════════════════════════════════════════════════
+# DATASET PATHS
+# ═══════════════════════════════════════════════════════════════
+
+IMAGE_FOLDER = "fashion_dataset/filtered_images"
+CSV_PATH     = "fashion_dataset/filtered_styles.csv"
+
+# ═══════════════════════════════════════════════════════════════
+# FILTER SETS  (keep in sync with bulk_insert_outfits.py)
+# ═══════════════════════════════════════════════════════════════
+
+ALLOWED_GENDER     = {"Men", "Women"}
+ALLOWED_MASTER_CAT = {"Apparel"}
+
+HARD_EXCLUDED = {
+    "Shoes", "Casual Shoes", "Sports Shoes", "Formal Shoes",
+    "Heels", "Flats", "Sandals", "Flip Flops", "Boots",
+    "Belts", "Bags", "Handbags", "Wallets", "Clutches",
+    "Watches", "Jewellery", "Earrings", "Necklace", "Ring",
+    "Headwear", "Caps", "Hat",
+    "Socks", "Stockings", "Tights",
+    "Perfume and Body Mist", "Sunscreen", "Lipstick",
+    "Backpacks", "Trolley Bag", "Travel Accessory",
+    "Water Bottle", "Umbrellas", "Key chain",
+    "Bra", "Briefs", "Boxers", "Trunk",
+    "Innerwear Vests", "Camisoles", "Shapewear",
+    "Swimwear", "Bikini", "Board Shorts",
+    "Lingerie Set", "Negligee", "Robe", "Baby Doll",
+}
+
+# ═══════════════════════════════════════════════════════════════
+# DISPLAY CATEGORY MAPS
+# ═══════════════════════════════════════════════════════════════
+
+MEN_DISPLAY_CATEGORY = {
+    "Tshirts":        "Tshirts",
+    "Shirts":         "Shirts",
+    "Kurtas":         "Kurtas",
+    "Kurta Sets":     "Kurtas",
+    "Sweatshirts":    "Hoodies",
+    "Hoodies":        "Hoodies",
+    "Jeans":          "Jeans",
+    "Trousers":       "Trousers",
+    "Shorts":         "Shorts",
+    "Cargos":         "Trousers",
+    "Joggers":        "Trousers",
+    "Track Pants":    "Gymwear",
+    "Tracksuits":     "Gymwear",
+    "Sports Jersey":  "Gymwear",
+    "Blazers":        "Blazers",
+    "Suits":          "Blazers",
+    "Suit Sets":      "Blazers",
+    "Nehru Jackets":  "Blazers",
+    "Waistcoat":      "Blazers",
+    "Jackets":        "Jackets",
+    "Windcheater":    "Jackets",
+    "Rain Jacket":    "Jackets",
+}
+
+WOMEN_DISPLAY_CATEGORY = {
+    "Shirts":         "Shirts",
+    "Tshirts":        "Tshirts",
+    "Tops":           "Tops",
+    "Blouses":        "Tops",
+    "Tunics":         "Tops",
+    "Kurtas":         "Kurti",
+    "Kurtis":         "Kurti",
+    "Kurta Sets":     "Kurti",
+    "Salwar":         "Kurti",
+    "Churidar":       "Kurti",
+    "Suits":          "Suit Sets",
+    "Suit Sets":      "Suit Sets",
+    "Sarees":         "Suit Sets",
+    "Lehenga Choli":  "Suit Sets",
+    "Jeans":          "Jeans",
+    "Trousers":       "Trousers",
+    "Shorts":         "Shorts",
+    "Skirts":         "Skirts",
+    "Capris":         "Trousers",
+    "Leggings":       "Trousers",
+    "Cargos":         "Trousers",
+    "Joggers":        "Trousers",
+    "Track Pants":    "Gymwear",
+    "Tracksuits":     "Gymwear",
+    "Sports Jersey":  "Gymwear",
+    "Lounge Pants":   "Gymwear",
+    "Lounge Shorts":  "Gymwear",
+    "Lounge Tshirts": "Gymwear",
+    "Dresses":        "Dresses",
+    "Jumpsuits":      "Dresses",
+    "Dungarees":      "Dresses",
+    "Co-ords":        "Dresses",
+    "Nightdress":     "Dresses",
+    "Jackets":        "Jackets",
+    "Blazers":        "Jackets",
+    "Sweatshirts":    "Hoodies",
+    "Hoodies":        "Hoodies",
+    "Shrugs":         "Jackets",
+    "Windcheater":    "Jackets",
+    "Rain Jacket":    "Jackets",
+}
+
+# ═══════════════════════════════════════════════════════════════
+# SLEEVE MAP
+# ═══════════════════════════════════════════════════════════════
+
+SLEEVE_MAP = {
+    "Tshirts":        "short",
+    "Tops":           "short",
+    "Sports Jersey":  "short",
+    "Lounge Tshirts": "short",
+    "Shirts":         "long",
+    "Sweatshirts":    "long",
+    "Hoodies":        "long",
+    "Sweaters":       "long",
+    "Jackets":        "long",
+    "Blazers":        "long",
+    "Suits":          "long",
+    "Suit Sets":      "long",
+    "Kurtas":         "long",
+    "Kurtis":         "long",
+    "Kurta Sets":     "long",
+    "Tunics":         "long",
+    "Blouses":        "long",
+    "Shrugs":         "long",
+    "Nehru Jackets":  "long",
+    "Waistcoat":      "long",
+    "Rain Jacket":    "long",
+    "Windcheater":    "long",
+    "Dresses":        "sleeveless",
+    "Sarees":         "sleeveless",
+    "Lehenga Choli":  "sleeveless",
+    "Jeans":          "sleeveless",
+    "Trousers":       "sleeveless",
+    "Shorts":         "sleeveless",
+    "Skirts":         "sleeveless",
+    "Leggings":       "sleeveless",
+    "Capris":         "sleeveless",
+    "Churidar":       "sleeveless",
+    "Salwar":         "sleeveless",
+    "Track Pants":    "sleeveless",
+    "Tracksuits":     "sleeveless",
+    "Lounge Pants":   "sleeveless",
+    "Lounge Shorts":  "sleeveless",
+    "Cargos":         "sleeveless",
+    "Joggers":        "sleeveless",
+    "Jumpsuits":      "sleeveless",
+    "Dungarees":      "sleeveless",
+    "Co-ords":        "sleeveless",
+    "Nightdress":     "sleeveless",
+}
+
+# ═══════════════════════════════════════════════════════════════
+# BODY TYPES
+# ═══════════════════════════════════════════════════════════════
+
+def get_body_types(article_type: str) -> list:
+    a = str(article_type).lower()
+    if any(x in a for x in ["dress", "kurta", "kurti", "gown", "saree",
+                              "lehenga", "jumpsuit", "dungaree", "co-ord"]):
+        return ["Hourglass", "Pear", "Rectangle", "Apple"]
+    if any(x in a for x in ["jean", "pant", "trouser", "short",
+                              "skirt", "legging", "capri", "cargo", "jogger"]):
+        return ["Pear", "Rectangle", "Apple"]
+    if any(x in a for x in ["shirt", "top", "blouse", "tshirt", "t-shirt",
+                              "sweater", "jacket", "coat", "sweatshirt",
+                              "hoodie", "blazer", "suit", "waistcoat"]):
+        return ["Hourglass", "Rectangle", "Apple"]
+    return ["Hourglass", "Pear", "Rectangle", "Apple"]
+
+# ═══════════════════════════════════════════════════════════════
+# DISPLAY CATEGORY HELPER
+# ═══════════════════════════════════════════════════════════════
+
+def get_display_category(gender: str, article_type: str) -> str:
+    if gender == "Men":
+        return MEN_DISPLAY_CATEGORY.get(article_type, article_type)
+    if gender == "Women":
+        return WOMEN_DISPLAY_CATEGORY.get(article_type, article_type)
+    return article_type
+
+def get_sleeve(article_type: str) -> str:
+    return SLEEVE_MAP.get(article_type, "short")
+
+# ═══════════════════════════════════════════════════════════════
+# LOAD CSV
+# ═══════════════════════════════════════════════════════════════
+
+try:
+    styles_df = pd.read_csv(CSV_PATH, on_bad_lines='skip')
+    print(f"✅ Loaded metadata: {len(styles_df)} rows")
+except Exception as e:
+    print(f"❌ Failed loading CSV: {e}")
+    exit(1)
+
+# ═══════════════════════════════════════════════════════════════
+# LOAD MOBILENET
+# ═══════════════════════════════════════════════════════════════
+
+print("Loading MobileNetV2...")
 try:
     import tensorflow as tf
+
     base_model = tf.keras.applications.MobileNetV2(
         weights="imagenet",
         include_top=False,
         pooling="avg",
-        input_shape=(224, 224, 3)
+        input_shape=(224, 224, 3),
     )
     base_model.trainable = False
-    print("✅ MobileNetV2 loaded")
     USE_MOBILENET = True
+    print("✅ MobileNetV2 loaded (1280-d features)")
+
 except Exception as e:
-    print(f"⚠️  MobileNet not available: {e}")
-    print("   Will use color histogram as fallback feature vector")
+    print(f"⚠️  MobileNet unavailable: {e}")
     USE_MOBILENET = False
 
+# ═══════════════════════════════════════════════════════════════
+# IMAGE PRE-PROCESSING
+# Resize to exactly 224×224 with padding to preserve aspect ratio
+# — better quality for feature extraction than simple squash.
+# ═══════════════════════════════════════════════════════════════
 
-# ── Feature extraction ────────────────────────────────────────────────────────
-def extract_mobilenet_features(image_path: str) -> list:
-    try:
-        img = cv2.imread(image_path)
-        if img is None:
-            return []
-        img = cv2.resize(img, (224, 224))
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        img = tf.keras.applications.mobilenet_v2.preprocess_input(img)
-        img = np.expand_dims(img, axis=0)
-        features = base_model.predict(img, verbose=0).flatten()
-        norm = np.linalg.norm(features)
-        if norm > 0:
-            features = features / norm
-        return features.tolist()
-    except Exception as e:
-        print(f"   ⚠️  Feature extraction error: {e}")
-        return []
+def preprocess_image(img_bgr: np.ndarray) -> np.ndarray:
+    """
+    Letterbox-resize to 224×224, convert to RGB, apply MobileNetV2
+    preprocessing.  Returns (1, 224, 224, 3) float32 tensor.
+    """
+    h, w = img_bgr.shape[:2]
+    scale = 224 / max(h, w)
+    new_h, new_w = int(h * scale), int(w * scale)
 
+    resized  = cv2.resize(img_bgr, (new_w, new_h),
+                          interpolation=cv2.INTER_LANCZOS4)
 
-def extract_color_histogram_features(image_path: str) -> list:
-    try:
-        img = cv2.imread(image_path)
-        if img is None:
-            return []
-        img = cv2.resize(img, (100, 100))
-        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-        h_hist = cv2.calcHist([hsv], [0], None, [32], [0, 180]).flatten()
-        s_hist = cv2.calcHist([hsv], [1], None, [32], [0, 256]).flatten()
-        v_hist = cv2.calcHist([hsv], [2], None, [32], [0, 256]).flatten()
-        features = np.concatenate([h_hist, s_hist, v_hist])
-        norm = np.linalg.norm(features)
-        if norm > 0:
-            features = features / norm
-        return features.tolist()
-    except Exception as e:
-        print(f"   ⚠️  Histogram error: {e}")
-        return []
+    canvas   = np.zeros((224, 224, 3), dtype=np.uint8)
+    y_off    = (224 - new_h) // 2
+    x_off    = (224 - new_w) // 2
+    canvas[y_off:y_off + new_h, x_off:x_off + new_w] = resized
 
+    rgb      = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
+    tensor   = tf.keras.applications.mobilenet_v2.preprocess_input(
+                    rgb.astype(np.float32))
+    return np.expand_dims(tensor, axis=0)
+
+# ═══════════════════════════════════════════════════════════════
+# FEATURE EXTRACTION
+# ═══════════════════════════════════════════════════════════════
 
 def extract_features(image_path: str) -> list:
-    if USE_MOBILENET:
-        return extract_mobilenet_features(image_path)
-    return extract_color_histogram_features(image_path)
-
-
-# ── Color detection ───────────────────────────────────────────────────────────
-COLOR_RANGES = [
-    ("red",    0,   10),
-    ("orange", 11,  20),
-    ("yellow", 21,  35),
-    ("green",  36,  85),
-    ("blue",   86, 130),
-    ("purple", 131,160),
-    ("pink",   161,170),
-    ("red",    171,180),
-]
-
-def detect_color_from_image(image_path: str) -> str:
     try:
         img = cv2.imread(image_path)
         if img is None:
-            return "multi"
-        img = cv2.resize(img, (100, 100))
-        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-        s = hsv[:, :, 1]
-        v = hsv[:, :, 2]
-        mask = (s > 40) & (v > 40) & (v < 240)
-        if np.sum(mask) < 50:
-            mean_v = float(np.mean(v))
-            if mean_v > 180:   return "white"
-            elif mean_v < 60:  return "black"
-            else:              return "grey"
-        hues   = hsv[:, :, 0][mask]
-        mean_h = float(np.mean(hues))
-        mean_s = float(np.mean(s[mask]))
-        if mean_s < 30:
-            mean_v = float(np.mean(v))
-            if mean_v > 170:  return "white"
-            elif mean_v < 70: return "black"
-            return "grey"
-        if mean_s < 80 and 10 <= mean_h <= 25:
-            return "brown"
-        for color_name, hue_min, hue_max in COLOR_RANGES:
-            if hue_min <= mean_h <= hue_max:
-                return color_name
-        return "multi"
-    except:
-        return "multi"
+            return []
 
+        tensor   = preprocess_image(img)
+        features = base_model.predict(tensor, verbose=0).flatten()
 
-# ── FIXED: Category → sleeve / occasion ──────────────────────────────────────
-#
-# SLEEVE_MAP rules:
-#   "short"      → t-shirt (has sleeves but they're short)
-#   "long"       → shirt (button-up, typically long), longsleeve, outwear
-#   "sleeveless" → dress, skirt, pants, shorts, hat, shoes
-#                  (these items either have no sleeves or are not tops)
-#
-# WHY THIS MATTERS: The sleeve filter in React does an exact string match.
-# If a t-shirt is stored as "sleeveless", filtering "short" will never find it.
-#
-SLEEVE_MAP = {
-    "t-shirt":   "short",       # ✅ FIXED: was missing, defaulted to wrong value
-    "shirt":     "long",        # button-up shirts are typically long-sleeved
-    "longsleeve":"long",        # explicitly long
-    "outwear":   "long",        # jackets/coats are long
-    "dress":     "sleeveless",  # dresses don't have arm sleeves as a category
-    "skirt":     "sleeveless",  # bottom-wear
-    "pants":     "sleeveless",  # bottom-wear
-    "shorts":    "sleeveless",  # bottom-wear
-    "hat":       "sleeveless",  # accessory
-    "shoes":     "sleeveless",  # accessory
-}
+        norm = np.linalg.norm(features)
+        if norm > 0:
+            features = features / norm
 
-OCCASION_MAP = {
-    "dress":      "party",
-    "skirt":      "casual",
-    "pants":      "formal",
-    "shorts":     "casual",
-    "shirt":      "formal",
-    "t-shirt":    "casual",
-    "longsleeve": "casual",
-   
-   
-}
+        return features.tolist()
 
+    except Exception as e:
+        print(f"  ⚠️  Feature error: {e}")
+        return []
 
-# ── Main processing ───────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
+# MAIN
+# ═══════════════════════════════════════════════════════════════
+
 def process_images():
-    outfits = []
+    image_files = sorted([
+        f for f in os.listdir(IMAGE_FOLDER)
+        if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))
+    ])
 
-    categories = [
-        d for d in os.listdir(BASE_FOLDER)
-        if os.path.isdir(os.path.join(BASE_FOLDER, d))
-    ]
-    print(f"\n📂 Categories found: {categories}\n")
+    print(f"\n📁 Found {len(image_files)} images\n")
 
-    for category in categories:
-        cat_path = os.path.join(BASE_FOLDER, category)
-        files    = [
-            f for f in os.listdir(cat_path)
-            if f.lower().endswith((".jpg", ".jpeg", ".png"))
-        ]
-        print(f"📁 {category}: {len(files)} images")
+    outfits  = []
+    skipped  = 0
+    failed   = 0
 
-        for i, file in enumerate(files):
-            image_path = os.path.join(cat_path, file)
-            print(f"   [{i+1}/{len(files)}] {file[:40]}", end=" ... ")
+    for i, filename in enumerate(image_files):
+        image_path = os.path.join(IMAGE_FOLDER, filename)
+        print(f"[{i+1}/{len(image_files)}] {filename}", end=" … ")
 
-            features = extract_features(image_path)
-            color    = detect_color_from_image(image_path)
+        try:
+            image_id  = int(filename.split('.')[0])
+            row_match = styles_df[styles_df['id'] == image_id]
 
-            # Use SLEEVE_MAP with fallback to "short" for any unknown top categories
-            cat_lower = category.lower().strip()
-            sleeves  = SLEEVE_MAP.get(cat_lower, "short")
-            occasion = OCCASION_MAP.get(cat_lower, "casual")
+            if row_match.empty:
+                print("❌ metadata missing")
+                skipped += 1
+                continue
 
-            print(f"color={color}, sleeves={sleeves}, features={len(features)} dims")
+            row = row_match.iloc[0]
 
-            outfits.append({
-                "name":       file.split(".")[0],
-                "category":   cat_lower,
-                "image_path": f"{category}/{file}",
-                "color":      color,
-                "sleeves":    sleeves,
-                "occasion":   occasion,
-                "features":   features,
-            })
+            gender       = str(row.get('gender',         '')).strip()
+            master_cat   = str(row.get('masterCategory', '')).strip()
+            article_type = str(row.get('articleType',    '')).strip()
 
-    print(f"\n📊 Total: {len(outfits)} outfits processed")
+            # ── Hard filters ──────────────────────────────────
+            if gender not in ALLOWED_GENDER:
+                skipped += 1
+                print(f"⏭ skip (gender={gender})")
+                continue
+
+            if master_cat not in ALLOWED_MASTER_CAT:
+                skipped += 1
+                print(f"⏭ skip (cat={master_cat})")
+                continue
+
+            if article_type in HARD_EXCLUDED:
+                skipped += 1
+                print(f"⏭ skip (excluded={article_type})")
+                continue
+
+            display_cat = get_display_category(gender, article_type)
+            all_known   = (set(MEN_DISPLAY_CATEGORY.keys()) |
+                           set(WOMEN_DISPLAY_CATEGORY.keys()))
+            if article_type not in all_known:
+                skipped += 1
+                print(f"⏭ skip (unmapped={article_type})")
+                continue
+
+            # ── Extract features ───────────────────────────────
+            if USE_MOBILENET:
+                features = extract_features(image_path)
+            else:
+                features = np.zeros(1280).tolist()
+
+            if not features:
+                print("❌ feature extraction failed")
+                failed += 1
+                continue
+
+            outfit = {
+                "image_id"        : image_id,
+                "name"            : str(row.get('productDisplayName', filename)),
+                "filename"        : filename,
+                "image_path"      : image_path,
+                "gender"          : gender,
+                "master_category" : master_cat,
+                "subcategory"     : str(row.get('subCategory', '')).strip(),
+                "article_type"    : article_type,
+                "category"        : article_type,
+                "display_category": display_cat,
+                "color"           : str(row.get('baseColour', 'Multi')).strip(),
+                "base_color"      : str(row.get('baseColour', 'Multi')).strip(),
+                "season"          : str(row.get('season', 'All')).strip(),
+                "occasion"        : str(row.get('usage', 'Casual')).strip(),
+                "usage"           : str(row.get('usage', 'Casual')).strip(),
+                "sleeves"         : get_sleeve(article_type),
+                "body_types"      : get_body_types(article_type),
+                "skin_tones"      : ["Fair", "Light Medium", "Medium", "Tan", "Deep"],
+                "features"        : features,
+            }
+
+            outfits.append(outfit)
+            print(f"✅ {gender} | {display_cat} | {outfit['occasion']} | {len(features)}d")
+
+        except Exception as e:
+            print(f"❌ {e}")
+            failed += 1
+
+    print(f"\n📊 Processed: {len(outfits)}  |  Skipped: {skipped}  |  Failed: {failed}")
 
     if not outfits:
-        print("⚠️  No outfits found!")
+        print("⚠️  Nothing to insert.")
         return
 
-    print("\n🗑️  Clearing old MongoDB data...")
+    men_count   = sum(1 for o in outfits if o["gender"] == "Men")
+    women_count = sum(1 for o in outfits if o["gender"] == "Women")
+    print(f"\n   Men:   {men_count}")
+    print(f"   Women: {women_count}")
+
+    # ── Clear and re-insert ───────────────────────────────────────────────
+    print("\n🗑️  Clearing old outfits…")
     collection.delete_many({})
 
-    print("💾 Inserting into MongoDB in batches...")
+    print("💾  Inserting into MongoDB…\n")
     batch_size = 50
     for i in range(0, len(outfits), batch_size):
-        batch = outfits[i:i + batch_size]
-        collection.insert_many(batch)
-        print(f"   ✅ Batch {i // batch_size + 1}: {len(batch)} outfits")
+        collection.insert_many(outfits[i:i + batch_size])
+        print(f"   ✅ Batch {i // batch_size + 1} done")
 
+    # ── Indexes ───────────────────────────────────────────────────────────
+    collection.create_index("gender")
+    collection.create_index("display_category")
+    collection.create_index("occasion")
+    collection.create_index("color")
+    print("✅ Indexes created")
+
+    # ── Final counts ──────────────────────────────────────────────────────
+    total    = collection.count_documents({})
+    men_db   = collection.count_documents({"gender": "Men"})
+    women_db = collection.count_documents({"gender": "Women"})
+
+    print("\n" + "=" * 60)
+    print("🎉  MOBILENET PROCESSING COMPLETE")
+    print("=" * 60)
+    print(f"Total inserted : {total}")
+    print(f"  Men          : {men_db}")
+    print(f"  Women        : {women_db}")
+    print(f"Feature dims   : {len(outfits[0]['features'])}")
+
+    print("\n📊  Display category breakdown:")
     from collections import Counter
-    print(f"\n✅ Done! {len(outfits)} outfits inserted with feature vectors")
-    print(f"   Colors:     {dict(Counter(o['color']    for o in outfits))}")
-    print(f"   Occasions:  {dict(Counter(o['occasion'] for o in outfits))}")
-    print(f"   Categories: {dict(Counter(o['category'] for o in outfits))}")
-    print(f"   Sleeves:    {dict(Counter(o['sleeves']  for o in outfits))}")
-    print(f"   Feature dim: {len(outfits[0]['features'])} per outfit")
+    all_docs = list(collection.find({}, {"_id": 0, "gender": 1, "display_category": 1}))
+    cnt = Counter((d["gender"], d.get("display_category", "?")) for d in all_docs)
+    for (g, cat), n in sorted(cnt.items()):
+        print(f"  [{g:<6}] {cat:<20} → {n}")
+
+    print("=" * 60)
 
 
 if __name__ == "__main__":

@@ -1,172 +1,244 @@
-#!/usr/bin/env python3
-"""Add outfit images from nested folders to MongoDB with base64 encoding"""
+"""
+add_outfits.py
+──────────────
+Adds Myntra fashion dataset outfits to MongoDB (with base64 image encoding).
+Use this script if your recommendation route serves images directly from DB.
 
-from pymongo import MongoClient
+For large datasets prefer bulk_insert_outfits.py (no base64, faster).
+
+Filters applied:
+  ✅  gender        : Men / Women only
+  ✅  masterCategory: Apparel only
+  ✅  subCategory   : clothing subcats only
+  ✅  articleType   : explicit exclusion list
+"""
+
 import os
-from dotenv import load_dotenv
 import base64
-from pathlib import Path
+import pandas as pd
+from pymongo import MongoClient
+from dotenv import load_dotenv
 
 load_dotenv()
 
-MONGO_URL = os.getenv("MONGO_URL")
+# ============================================================
+# MONGODB
+# ============================================================
 
+MONGO_URL = os.getenv("MONGO_URL")
 if not MONGO_URL:
-    print("❌ ERROR: MONGO_URL not set in .env")
+    print("❌  MONGO_URL not set in .env")
     exit(1)
 
 print("Connecting to MongoDB...")
 client = MongoClient(MONGO_URL)
-db = client["ai_fashion"]
+db     = client["ai_fashion"]
+print("✅  MongoDB connected\n")
 
-# Path to outfit images folder
-OUTFIT_IMAGES_PATH = "outfit_images"
+# ============================================================
+# PATHS
+# ============================================================
 
-def encode_image_to_base64(image_path):
-    """Read image file and convert to base64"""
+IMAGE_FOLDER = "fashion_dataset/filtered_images"
+CSV_PATH     = "fashion_dataset/filtered_styles.csv"
+
+IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp']
+
+# ============================================================
+# FILTER SETS  (keep in sync with dataset_filter.py)
+# ============================================================
+
+ALLOWED_GENDER = {"Men", "Women"}
+
+ALLOWED_MASTER_CAT = {"Apparel"}
+
+ALLOWED_SUBCATEGORY = {
+    "Topwear",
+    "Bottomwear",
+    "Dress",
+    "Saree",
+    "Suits",
+    "Loungewear and Nightwear",
+    "Innerwear",
+}
+
+EXCLUDED_ARTICLE_TYPES = {
+    "Shoes", "Casual Shoes", "Sports Shoes", "Formal Shoes",
+    "Heels", "Flats", "Sandals", "Flip Flops", "Boots",
+    "Belts", "Bags", "Handbags", "Wallets", "Clutches",
+    "Watches", "Jewellery", "Earrings", "Necklace", "Ring",
+    "Headwear", "Caps", "Hat",
+    "Socks", "Stockings", "Tights",
+    "Perfume and Body Mist", "Sunscreen", "Lipstick",
+    "Backpacks", "Trolley Bag", "Travel Accessory",
+    "Water Bottle", "Umbrellas", "Key chain",
+}
+
+# ============================================================
+# HELPERS
+# ============================================================
+
+def encode_image_to_base64(path: str):
     try:
-        with open(image_path, 'rb') as image_file:
-            image_data = base64.b64encode(image_file.read()).decode('utf-8')
-            return image_data
+        with open(path, 'rb') as f:
+            return base64.b64encode(f.read()).decode('utf-8')
     except Exception as e:
-        print(f"      Error reading image: {str(e)}")
+        print(f"  ❌  Encode error: {e}")
         return None
 
-def get_outfit_files_from_subfolders():
-    """Get all image files from nested folders like dress/, hats/, etc."""
-    if not os.path.exists(OUTFIT_IMAGES_PATH):
-        print(f"❌ ERROR: {OUTFIT_IMAGES_PATH} folder not found!")
-        return []
-    
-    image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp']
-    outfit_files = []
-    
-    # Get all subfolders (dress, hats, etc.)
-    for subfolder in sorted(os.listdir(OUTFIT_IMAGES_PATH)):
-        subfolder_path = os.path.join(OUTFIT_IMAGES_PATH, subfolder)
-        
-        # Skip if not a folder
-        if not os.path.isdir(subfolder_path):
-            continue
-        
-        print(f"📁 Found folder: {subfolder}/")
-        
-        # Get all images in this subfolder
-        for file in sorted(os.listdir(subfolder_path)):
-            file_path = os.path.join(subfolder_path, file)
-            
-            if os.path.isfile(file_path) and any(file.lower().endswith(ext) for ext in image_extensions):
-                outfit_files.append({
-                    'filename': file,
-                    'filepath': file_path,
-                    'category': subfolder,
-                    'name': f"{subfolder.capitalize()} - {file.split('.')[0]}"
-                })
-    
-    return outfit_files
 
-try:
-    # Get outfit images from nested folders
-    outfit_files = get_outfit_files_from_subfolders()
-    
-    if not outfit_files:
-        print(f"\n❌ No image files found in {OUTFIT_IMAGES_PATH}/ subfolders!")
-        print("   Expected structure:")
-        print("   outfit_images/")
-        print("   ├── dress/")
-        print("   │   ├── image1.jpg")
-        print("   │   └── image2.jpg")
-        print("   ├── hats/")
-        print("   │   └── image1.jpg")
-        print("   └── ...")
+def load_metadata():
+    try:
+        df = pd.read_csv(CSV_PATH, on_bad_lines='skip')
+        print(f"✅  Loaded metadata: {len(df)} rows")
+        return df
+    except Exception as e:
+        print(f"❌  Failed to load CSV: {e}")
         exit(1)
-    
-    print(f"\n✅ Found {len(outfit_files)} total image files\n")
-    
-    outfits_collection = db["outfits"]
-    
-    # OPTION 1: Clear and recreate (uncomment if you want fresh data)
-    # deleted = outfits_collection.delete_many({})
-    # print(f"✅ Deleted {deleted.deleted_count} existing outfits\n")
-    
-    # OPTION 2: Update existing outfits with images (RECOMMENDED)
-    print("Updating existing outfits with images...\n")
-    
-    inserted_count = 0
-    updated_count = 0
-    
-    for outfit_info in outfit_files:
-        outfit_name = outfit_info['filename']
-        filepath = outfit_info['filepath']
-        category = outfit_info['category']
-        
-        print(f"  {outfit_name}...", end="", flush=True)
-        
-        # Encode image to base64
-        image_data = encode_image_to_base64(filepath)
-        
-        if image_data:
-            # Try to UPDATE existing outfit first
-            result = outfits_collection.update_one(
-                {"name": outfit_name},
-                {
-                    "$set": {
-                        "image": image_data,
-                        "category": category,
-                        "filename": outfit_info['filename']
-                    }
-                }
-            )
-            
-            if result.matched_count > 0:
-                updated_count += 1
-                print(" ✅ (updated)")
-            else:
-                # If not found, insert new
-                outfit = {
-                    "name": outfit_name,
-                    "type": category.lower(),
-                    "color": "Multi",
-                    "sleeves": "Short Sleeves",
-                    "occasion": "Casual",
-                    "image": image_data,
-                    "filename": outfit_info['filename'],
-                    "category": category,
-                    "body_types": ["hourglass", "pear", "rectangle", "apple"],
-                    "skin_tones": ["fair", "medium", "tan", "deep"],
-                    "features": [0.0] * 512
-                }
-                
-                outfits_collection.insert_one(outfit)
-                inserted_count += 1
-                print(" ✅ (inserted)")
-        else:
-            print(" ❌ (failed)")
-    
-    # Verify
-    total = outfits_collection.count_documents({})
-    with_images = outfits_collection.count_documents({"image": {"$ne": None}})
-    
-    print(f"\n{'='*60}")
-    print(f"✅ COMPLETE!")
-    print(f"{'='*60}")
-    print(f"Total outfits in database: {total}")
-    print(f"Outfits with images: {with_images}")
-    print(f"Updated: {updated_count}")
-    print(f"Inserted: {inserted_count}")
-    
-    # Show breakdown by category
-    print(f"\n📊 Breakdown by category:")
-    for category in set(item['category'] for item in outfit_files):
-        cat_count = sum(1 for item in outfit_files if item['category'] == category)
-        print(f"   {category.capitalize()}: {cat_count} images")
-    
-    print(f"\n{'='*60}")
-    print(f"🎉 Real outfit images successfully added!")
-    print(f"{'='*60}")
 
-except Exception as e:
-    print(f"❌ Error: {str(e)}")
-    import traceback
-    traceback.print_exc()
+
+def get_all_images():
+    if not os.path.exists(IMAGE_FOLDER):
+        print(f"❌  Image folder not found: {IMAGE_FOLDER}")
+        return []
+    return [
+        {"filename": f, "filepath": os.path.join(IMAGE_FOLDER, f)}
+        for f in sorted(os.listdir(IMAGE_FOLDER))
+        if os.path.isfile(os.path.join(IMAGE_FOLDER, f))
+        and any(f.lower().endswith(ext) for ext in IMAGE_EXTENSIONS)
+    ]
+
+
+def get_body_types(article_type: str) -> list:
+    a = str(article_type).lower()
+    if any(x in a for x in ["dress", "kurta", "gown", "saree"]):
+        return ["hourglass", "pear", "rectangle", "apple"]
+    if any(x in a for x in ["jeans", "pants", "trousers",
+                              "shorts", "skirt", "leggings"]):
+        return ["pear", "rectangle", "apple"]
+    if any(x in a for x in ["shirt", "top", "blouse",
+                              "t-shirt", "tshirt", "sweater",
+                              "jacket", "coat", "sweatshirt"]):
+        return ["hourglass", "rectangle", "apple"]
+    return ["hourglass", "pear", "rectangle", "apple"]
+
+# ============================================================
+# MAIN
+# ============================================================
+
+styles_df   = load_metadata()
+image_files = get_all_images()
+
+if not image_files:
+    print("❌  No images found!")
     exit(1)
+
+print(f"✅  Found {len(image_files)} images\n")
+
+outfits_collection = db["outfits"]
+
+inserted_count = 0
+skipped_count  = 0
+
+for image_info in image_files:
+
+    filename = image_info["filename"]
+    filepath = image_info["filepath"]
+
+    try:
+        image_id  = int(filename.split('.')[0])
+        row_match = styles_df[styles_df['id'] == image_id]
+
+        if row_match.empty:
+            skipped_count += 1
+            continue
+
+        row = row_match.iloc[0]
+
+        gender       = str(row.get('gender', '')).strip()
+        master_cat   = str(row.get('masterCategory', '')).strip()
+        sub_cat      = str(row.get('subCategory', '')).strip()
+        article_type = str(row.get('articleType', '')).strip()
+
+        # ── Filters ───────────────────────────────────────
+        if gender not in ALLOWED_GENDER:
+            skipped_count += 1
+            continue
+
+        if master_cat not in ALLOWED_MASTER_CAT:
+            skipped_count += 1
+            continue
+
+        if sub_cat not in ALLOWED_SUBCATEGORY:
+            skipped_count += 1
+            continue
+
+        if article_type in EXCLUDED_ARTICLE_TYPES:
+            skipped_count += 1
+            continue
+
+        # ── Avoid duplicates ──────────────────────────────
+        if outfits_collection.find_one({"filename": filename}):
+            print(f"  ⚠️  Already exists: {filename}")
+            skipped_count += 1
+            continue
+
+        # ── Encode image ──────────────────────────────────
+        image_data = encode_image_to_base64(filepath)
+        if not image_data:
+            skipped_count += 1
+            continue
+
+        # ── Build document ────────────────────────────────
+        outfit = {
+            "name"           : str(row.get('productDisplayName', filename)),
+            "filename"       : filename,
+            "image"          : image_data,
+            "image_path"     : filepath,
+
+            "gender"         : gender,          # "Men" or "Women"
+
+            "master_category": master_cat,
+            "subcategory"    : sub_cat,
+            "article_type"   : article_type,
+
+            # Aliases
+            "type"           : article_type,
+            "category"       : article_type,
+            "color"          : str(row.get('baseColour', 'Multi')),
+            "base_color"     : str(row.get('baseColour', 'Multi')),
+            "season"         : str(row.get('season', 'All')),
+            "occasion"       : str(row.get('usage', 'Casual')),
+            "usage"          : str(row.get('usage', 'Casual')),
+
+            "body_types"     : get_body_types(article_type),
+            "skin_tones"     : ["fair", "medium", "tan", "deep"],
+
+            "features"       : [0.0] * 512,
+        }
+
+        outfits_collection.insert_one(outfit)
+        inserted_count += 1
+        print(f"  ✅  {filename} | {gender} | {article_type}")
+
+    except Exception as e:
+        print(f"  ❌  Error on {filename}: {e}")
+        skipped_count += 1
+
+# ============================================================
+# SUMMARY
+# ============================================================
+
+total       = outfits_collection.count_documents({})
+men_count   = outfits_collection.count_documents({"gender": "Men"})
+women_count = outfits_collection.count_documents({"gender": "Women"})
+
+print("\n" + "=" * 60)
+print("🎉  DATASET IMPORT COMPLETE")
+print("=" * 60)
+print(f"Total in DB  : {total}")
+print(f"  Men        : {men_count}")
+print(f"  Women      : {women_count}")
+print(f"Inserted now : {inserted_count}")
+print(f"Skipped      : {skipped_count}")
+print("=" * 60)

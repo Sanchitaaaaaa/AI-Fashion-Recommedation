@@ -1,374 +1,564 @@
-import mediapipe as mp
-import cv2
-import numpy as np
-from typing import Dict, Any, Optional, Tuple
+"""
+mediapipe_service.py
+────────────────────
+MediaPipe Pose-based body analyser + FaceDetection-based skin tone detector.
 
-# Initialize MediaPipe
+Improvements in v3.0
+─────────────────────
+• Body type classifier uses a score-based approach across 5 types
+  (Hourglass, Pear, Inverted Triangle, Rectangle, Apple) — no brittle
+  if-elif thresholds.
+• Skin tone uses MediaPipe FaceDetection bbox (not arbitrary crop).
+  Falls back to multi-candidate scan with skin-pixel counting.
+• Dual HSV + YCrCb skin mask works across all Fitzpatrick types.
+• Skin tone labels: Fair, Light Medium, Medium, Tan, Deep.
+• Image quality: input is expected to be at least 480×640.
+  The analyser does NOT down-scale internally — keep source res.
+"""
+
+import cv2
+import mediapipe as mp
+import numpy as np
+
+from typing import Dict, Any, Tuple, Optional
+
+# =========================================================
+# MEDIAPIPE INIT
+# =========================================================
+
 mp_pose = mp.solutions.pose
-mp_drawing = mp.solutions.drawing_utils
+mp_face = mp.solutions.face_detection
+
+VISIBILITY_THRESHOLD = 0.55
+
+
+# =========================================================
+# HELPERS
+# =========================================================
+
+def _px(lm, w: int, h: int) -> Tuple[float, float]:
+    return lm.x * w, lm.y * h
+
+
+def _mid(a: Tuple, b: Tuple) -> Tuple[float, float]:
+    return (a[0] + b[0]) / 2, (a[1] + b[1]) / 2
+
+
+def _dist_x(a: Tuple, b: Tuple) -> float:
+    return abs(a[0] - b[0])
+
+
+def _dist_y(a: Tuple, b: Tuple) -> float:
+    return abs(a[1] - b[1])
+
+
+def _visible(*lms) -> bool:
+    return all(lm.visibility >= VISIBILITY_THRESHOLD for lm in lms)
+
+
+# =========================================================
+# BODY ANALYZER CLASS
+# =========================================================
 
 class BodyAnalyzer:
+
     def __init__(self):
         self.pose = mp_pose.Pose(
             static_image_mode=True,
             model_complexity=2,
-            min_detection_confidence=0.5
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5,
+        )
+        self.face_detector = mp_face.FaceDetection(
+            model_selection=1,            # long-range model
+            min_detection_confidence=0.4,
         )
 
+    # =====================================================
+    # MAIN ENTRY POINT
+    # =====================================================
+
     def analyze(self, image: np.ndarray) -> Dict[str, Any]:
-        """Analyze body measurements from image"""
+        """
+        Parameters
+        ----------
+        image : np.ndarray  — BGR image from cv2 / camera.
+
+        Returns
+        -------
+        dict with body_type, skin_tone, height_category, confidences,
+        and detailed measurement features.
+        """
         try:
             image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            h, w, _ = image.shape
-
-            results = self.pose.process(image_rgb)
+            h, w, _   = image.shape
+            results   = self.pose.process(image_rgb)
 
             if not results.pose_landmarks:
+                print("❌ No body detected by MediaPipe Pose")
                 return self._empty_result()
 
-            landmarks = results.pose_landmarks.landmark
+            lm = results.pose_landmarks.landmark
 
-            # ── Key landmark points ────────────────────────────────────────
-            left_shoulder  = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER]
-            right_shoulder = landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER]
-            left_hip       = landmarks[mp_pose.PoseLandmark.LEFT_HIP]
-            right_hip      = landmarks[mp_pose.PoseLandmark.RIGHT_HIP]
-            left_ankle     = landmarks[mp_pose.PoseLandmark.LEFT_ANKLE]
-            right_ankle    = landmarks[mp_pose.PoseLandmark.RIGHT_ANKLE]
-            left_wrist     = landmarks[mp_pose.PoseLandmark.LEFT_WRIST]
-            right_wrist    = landmarks[mp_pose.PoseLandmark.RIGHT_WRIST]
-            left_elbow     = landmarks[mp_pose.PoseLandmark.LEFT_ELBOW]
-            right_elbow    = landmarks[mp_pose.PoseLandmark.RIGHT_ELBOW]
+            # ── Key landmarks ──────────────────────────────────
+            l_shoulder = lm[mp_pose.PoseLandmark.LEFT_SHOULDER]
+            r_shoulder = lm[mp_pose.PoseLandmark.RIGHT_SHOULDER]
+            l_hip      = lm[mp_pose.PoseLandmark.LEFT_HIP]
+            r_hip      = lm[mp_pose.PoseLandmark.RIGHT_HIP]
+            l_ankle    = lm[mp_pose.PoseLandmark.LEFT_ANKLE]
+            r_ankle    = lm[mp_pose.PoseLandmark.RIGHT_ANKLE]
+            l_knee     = lm[mp_pose.PoseLandmark.LEFT_KNEE]
+            r_knee     = lm[mp_pose.PoseLandmark.RIGHT_KNEE]
+            l_wrist    = lm[mp_pose.PoseLandmark.LEFT_WRIST]
+            r_wrist    = lm[mp_pose.PoseLandmark.RIGHT_WRIST]
+            nose       = lm[mp_pose.PoseLandmark.NOSE]
 
-            # ── Pixel measurements ─────────────────────────────────────────
-            shoulder_width = abs(right_shoulder.x - left_shoulder.x) * w
-            hip_width      = abs(right_hip.x - left_hip.x) * w
+            if not _visible(l_shoulder, r_shoulder, l_hip, r_hip):
+                print("❌ Core landmarks not visible — image may be cropped")
+                return self._empty_result()
 
-            shoulder_y = (left_shoulder.y + right_shoulder.y) / 2 * h
-            hip_y      = (left_hip.y + right_hip.y) / 2 * h
-            ankle_y    = (left_ankle.y + right_ankle.y) / 2 * h
+            # ── Pixel coordinates ──────────────────────────────
+            ls_px  = _px(l_shoulder, w, h)
+            rs_px  = _px(r_shoulder, w, h)
+            lh_px  = _px(l_hip,      w, h)
+            rh_px  = _px(r_hip,      w, h)
+            la_px  = _px(l_ankle,    w, h)
+            ra_px  = _px(r_ankle,    w, h)
+            lw_px  = _px(l_wrist,    w, h)
+            rw_px  = _px(r_wrist,    w, h)
+            nose_px = _px(nose,      w, h)
 
-            torso_len = abs(hip_y - shoulder_y)
-            leg_len   = abs(ankle_y - hip_y)
+            mid_shoulder = _mid(ls_px, rs_px)
+            mid_hip      = _mid(lh_px, rh_px)
+            mid_ankle    = _mid(la_px, ra_px)
 
-            # ── Bust width: proxy using shoulder + outer arm geometry ──────
-            # Bust sits ~25% down from shoulder to hip on the torso.
-            # We estimate it as slightly wider than shoulder for females
-            # (accounting for MediaPipe under-reporting shoulder extremes).
-            bust_width = self._estimate_bust_width(
-                image, shoulder_y, hip_y, w, h,
-                left_shoulder, right_shoulder, left_elbow, right_elbow
+            # ── Width measurements ─────────────────────────────
+
+            shoulder_width = _dist_x(ls_px, rs_px)
+            hip_width      = _dist_x(lh_px, rh_px)
+
+            # Bust = weighted average of shoulder and chest-level width
+            mid_bust_l  = _mid(ls_px, lh_px)
+            mid_bust_r  = _mid(rs_px, rh_px)
+            chest_width = _dist_x(mid_bust_l, mid_bust_r)
+            bust_width  = shoulder_width * 0.60 + chest_width * 0.40
+
+            # Waist = 60% of the way from shoulder to hip (geometric)
+            waist_l = (
+                ls_px[0] * 0.40 + lh_px[0] * 0.60,
+                ls_px[1] * 0.40 + lh_px[1] * 0.60,
             )
-
-            # ── Waist estimation (multi-strategy) ─────────────────────────
-            waist_width = self._estimate_waist_width_robust(
-                image, shoulder_y, hip_y, w, h,
-                left_shoulder, right_shoulder,
-                left_elbow, right_elbow,
-                shoulder_width, hip_width
+            waist_r = (
+                rs_px[0] * 0.40 + rh_px[0] * 0.60,
+                rs_px[1] * 0.40 + rh_px[1] * 0.60,
             )
+            waist_width = _dist_x(waist_l, waist_r)
 
-            # ── Ratios ─────────────────────────────────────────────────────
-            # Use bust as the "top" measurement — more reliable than shoulders alone
-            effective_top = max(bust_width, shoulder_width)
+            # Refine with wrist gap when arms are at the side
+            if _visible(l_wrist, r_wrist):
+                wrist_gap   = _dist_x(lw_px, rw_px)
+                wrist_mid_y = (lw_px[1] + rw_px[1]) / 2
+                waist_y     = (waist_l[1] + waist_r[1]) / 2
+                if abs(wrist_mid_y - waist_y) < h * 0.12:
+                    waist_width = waist_width * 0.55 + wrist_gap * 0.45
 
-            shoulder_hip_ratio = effective_top / (hip_width + 0.001)
-            waist_hip_ratio    = waist_width / (hip_width + 0.001)
-            bust_waist_ratio   = effective_top / (waist_width + 0.001)
-            leg_torso_ratio    = leg_len / (torso_len + 0.001)
+            # Sanity clamp: waist should be 65–98% of hip width
+            waist_width = float(np.clip(
+                waist_width,
+                hip_width * 0.65,
+                hip_width * 0.98,
+            ))
 
-            arm_spread = abs(right_wrist.x - left_wrist.x) * w
-            arm_body_ratio = arm_spread / (shoulder_width + 0.001)
+            # ── Height measurements ────────────────────────────
 
-            print(f"   shoulder_width={shoulder_width:.1f}  bust_width={bust_width:.1f}  "
-                  f"hip_width={hip_width:.1f}  waist_width={waist_width:.1f}")
-            print(f"   S/H={shoulder_hip_ratio:.3f}  W/H={waist_hip_ratio:.3f}  "
-                  f"B/W={bust_waist_ratio:.3f}  L/T={leg_torso_ratio:.3f}")
+            torso_length = _dist_y(mid_shoulder, mid_hip)
+            leg_length   = _dist_y(mid_hip,      mid_ankle)
+            full_height  = _dist_y(nose_px,      mid_ankle)
 
-            body_type, confidence = self._classify_body_type(
-                shoulder_hip_ratio, waist_hip_ratio, bust_waist_ratio
+            # ── Ratios ─────────────────────────────────────────
+
+            shoulder_hip_ratio = shoulder_width / (hip_width    + 1e-6)
+            waist_hip_ratio    = waist_width    / (hip_width    + 1e-6)
+            bust_waist_ratio   = bust_width     / (waist_width  + 1e-6)
+            leg_torso_ratio    = leg_length     / (torso_length + 1e-6)
+
+            print("\n========== MEASUREMENTS (px) ==========")
+            print(f"Shoulder Width : {shoulder_width:.1f}")
+            print(f"Bust Width     : {bust_width:.1f}")
+            print(f"Waist Width    : {waist_width:.1f}")
+            print(f"Hip Width      : {hip_width:.1f}")
+            print("\n========== BODY RATIOS ==========")
+            print(f"Shoulder/Hip   : {shoulder_hip_ratio:.3f}")
+            print(f"Waist/Hip      : {waist_hip_ratio:.3f}")
+            print(f"Bust/Waist     : {bust_waist_ratio:.3f}")
+            print(f"Leg/Torso      : {leg_torso_ratio:.3f}")
+
+            # ── Classify body type ─────────────────────────────
+
+            body_type, bt_confidence = self._classify_body_type(
+                shoulder_hip_ratio,
+                waist_hip_ratio,
+                bust_waist_ratio,
             )
 
             height_category = self._classify_height(leg_torso_ratio)
 
+            # ── Skin tone ──────────────────────────────────────
+
+            skin_tone, skin_confidence = self.detect_skin_tone(
+                image, image_rgb
+            )
+
+            print("\n========== FINAL ANALYSIS ==========")
+            print(f"Body Type      : {body_type}  (conf={bt_confidence:.2f})")
+            print(f"Height Cat.    : {height_category}")
+            print(f"Skin Tone      : {skin_tone}  (conf={skin_confidence:.2f})")
+
             return {
-                "body_type":             body_type,
-                "body_type_confidence":  confidence,
-                "height_category":       height_category,
-                "raw_landmarks":         landmarks,
+                "body_type":            body_type,
+                "body_type_confidence": bt_confidence,
+                "height_category":      height_category,
+                "skin_tone":            skin_tone,
+                "skin_tone_confidence": skin_confidence,
                 "features": {
+                    "shoulder_width_px":  round(shoulder_width, 1),
+                    "bust_width_px":      round(bust_width, 1),
+                    "waist_width_px":     round(waist_width, 1),
+                    "hip_width_px":       round(hip_width, 1),
                     "shoulder_hip_ratio": round(shoulder_hip_ratio, 3),
                     "waist_hip_ratio":    round(waist_hip_ratio, 3),
                     "bust_waist_ratio":   round(bust_waist_ratio, 3),
-                    "leg_torso_ratio":    round(leg_torso_ratio, 3),
-                    "arm_body_ratio":     round(arm_body_ratio, 3),
-                }
+                },
             }
 
         except Exception as e:
-            print(f"Body analysis error: {str(e)}")
+            print(f"❌ Analysis error: {e}")
             import traceback
             traceback.print_exc()
             return self._empty_result()
 
-    def _empty_result(self) -> Dict[str, Any]:
-        return {
-            "body_type":            "Unknown",
-            "body_type_confidence": 0.0,
-            "height_category":      "Average",
-            "raw_landmarks":        None,
-            "features": {
-                "shoulder_hip_ratio": 0.0,
-                "waist_hip_ratio":    0.0,
-                "bust_waist_ratio":   0.0,
-                "leg_torso_ratio":    0.0,
-                "arm_body_ratio":     0.0,
-            }
+    # =====================================================
+    # BODY TYPE CLASSIFICATION  (score-based)
+    # =====================================================
+
+    def _classify_body_type(
+        self,
+        shr: float,   # shoulder / hip
+        whr: float,   # waist / hip
+        bwr: float,   # bust / waist
+    ) -> Tuple[str, float]:
+        """
+        Reference ranges (literature-backed):
+        ┌──────────────────────┬───────────┬───────────┬───────────┐
+        │ Body Type            │  SHR      │  WHR      │  BWR      │
+        ├──────────────────────┼───────────┼───────────┼───────────┤
+        │ Hourglass            │ 0.97–1.07 │ < 0.75    │ > 1.25    │
+        │ Pear (Triangle)      │ < 0.93    │ 0.70–0.88 │ any       │
+        │ Inverted Triangle    │ > 1.08    │ 0.70–0.90 │ ≥ 1.10    │
+        │ Rectangle (Banana)   │ 0.93–1.08 │ 0.80–0.92 │ 1.05–1.25 │
+        │ Apple (Round/Oval)   │ 0.90–1.10 │ > 0.88    │ < 1.15    │
+        └──────────────────────┴───────────┴───────────┴───────────┘
+        """
+        scores: Dict[str, float] = {
+            "Hourglass":         0.0,
+            "Pear":              0.0,
+            "Inverted Triangle": 0.0,
+            "Rectangle":         0.0,
+            "Apple":             0.0,
         }
 
-    def _estimate_bust_width(
-        self, image, shoulder_y, hip_y, w, h,
-        left_shoulder, right_shoulder,
-        left_elbow, right_elbow
-    ) -> float:
-        """
-        Estimate bust width at ~22% down the torso from shoulders.
-        Strategy:
-          1. Try edge detection at bust level.
-          2. Fall back to shoulder_width * 1.05 (bust is typically slightly
-             wider than MediaPipe-detected shoulder points which clip inner edges).
-        """
-        try:
-            shoulder_width = abs(right_shoulder.x - left_shoulder.x) * w
-            bust_y = int(shoulder_y + (hip_y - shoulder_y) * 0.22)
+        scores["Hourglass"]         += self._score(shr, 0.97, 1.07, 2.0)
+        scores["Hourglass"]         += self._score_below(whr, 0.75, 2.5)
+        scores["Hourglass"]         += self._score_above(bwr, 1.25, 2.0)
 
-            band = max(4, int(h * 0.025))
-            y1 = max(0, bust_y - band)
-            y2 = min(h, bust_y + band)
+        scores["Pear"]              += self._score_below(shr, 0.93, 3.0)
+        scores["Pear"]              += self._score(whr, 0.70, 0.88, 1.5)
 
-            # Widen horizontal search slightly beyond shoulders
-            ls_x = int(left_shoulder.x * w)
-            rs_x = int(right_shoulder.x * w)
-            margin = int(w * 0.06)
-            x_left  = max(0, min(ls_x, rs_x) - margin)
-            x_right = min(w, max(ls_x, rs_x) + margin)
+        scores["Inverted Triangle"] += self._score_above(shr, 1.08, 3.0)
+        scores["Inverted Triangle"] += self._score(whr, 0.70, 0.90, 1.5)
+        scores["Inverted Triangle"] += self._score_above(bwr, 1.10, 1.0)
 
-            roi = image[y1:y2, x_left:x_right]
-            if roi.size == 0:
-                raise ValueError("Empty ROI")
+        scores["Rectangle"]         += self._score(shr, 0.93, 1.08, 2.0)
+        scores["Rectangle"]         += self._score(whr, 0.80, 0.92, 2.0)
+        scores["Rectangle"]         += self._score(bwr, 1.05, 1.25, 1.5)
 
-            bust_px = self._edge_width(roi)
-            if bust_px is None:
-                raise ValueError("Edge detection failed")
+        scores["Apple"]             += self._score_above(whr, 0.88, 3.0)
+        scores["Apple"]             += self._score(shr, 0.90, 1.10, 1.5)
+        scores["Apple"]             += self._score_below(bwr, 1.15, 1.5)
 
-            # Sanity: bust should be 90%–130% of shoulder width
-            if bust_px < shoulder_width * 0.90 or bust_px > shoulder_width * 1.30:
-                raise ValueError(f"Bust {bust_px:.1f} outside plausible range")
+        best_type  = max(scores, key=scores.__getitem__)
+        best_score = scores[best_type]
+        total      = sum(scores.values()) + 1e-6
+        raw_conf   = best_score / total
+        confidence = round(0.70 + raw_conf * 0.27, 2)
 
-            return float(bust_px)
+        print("\n========== BODY TYPE SCORES ==========")
+        for k, v in sorted(scores.items(), key=lambda x: -x[1]):
+            print(f"  {k:<22}: {v:.3f}")
 
-        except Exception as ex:
-            print(f"   Bust fallback ({ex}): shoulder*1.05")
-            shoulder_width = abs(right_shoulder.x - left_shoulder.x) * w
-            return shoulder_width * 1.05
+        return best_type, confidence
 
-    def _estimate_waist_width_robust(
-        self, image, shoulder_y, hip_y, w, h,
-        left_shoulder, right_shoulder,
-        left_elbow, right_elbow,
-        shoulder_width, hip_width
-    ) -> float:
-        """
-        Multi-strategy waist estimation (in priority order):
+    # ---- scoring helpers ----------------------------------------
 
-        Strategy 1 — Elbow-based anatomical proxy:
-          The elbows hang at approximately waist level when arms are relaxed.
-          Waist width ≈ inner distance between elbows (minus arm thickness ~8%).
-          This works well on solid-colored outfits where Canny struggles.
+    @staticmethod
+    def _score(val: float, lo: float, hi: float,
+               weight: float = 1.0) -> float:
+        if lo <= val <= hi:
+            return weight
+        margin = (hi - lo) * 0.5
+        if val < lo:
+            return weight * max(0.0, 1.0 - (lo - val) / margin)
+        return weight * max(0.0, 1.0 - (val - hi) / margin)
 
-        Strategy 2 — Edge detection at waist level (~45% down torso):
-          Canny edges with a wider ROI and looser sanity bounds.
+    @staticmethod
+    def _score_above(val: float, threshold: float,
+                     weight: float = 1.0) -> float:
+        if val >= threshold:
+            return weight
+        margin = threshold * 0.15
+        return weight * max(0.0, 1.0 - (threshold - val) / margin)
 
-        Strategy 3 — Geometric interpolation:
-          Waist = hip_width * 0.82  (average female WHR is ~0.75–0.85)
-          Avoids the shoulder*0.82 fallback which inflated Apple misclassifications.
-        """
-        # ── Strategy 1: Elbow-gap proxy ────────────────────────────────────
-        try:
-            elbow_gap = abs(right_elbow.x - left_elbow.x) * w
-            # Arms against body → elbow gap ≈ waist width
-            # Arms slightly out → subtract arm thickness (~8% each side)
-            arm_thickness_factor = 0.84
-            waist_from_elbows = elbow_gap * arm_thickness_factor
+    @staticmethod
+    def _score_below(val: float, threshold: float,
+                     weight: float = 1.0) -> float:
+        if val <= threshold:
+            return weight
+        margin = threshold * 0.15
+        return weight * max(0.0, 1.0 - (val - threshold) / margin)
 
-            # Sanity: waist 65%–100% of shoulder width, 70%–105% of hip width
-            if (shoulder_width * 0.65 <= waist_from_elbows <= shoulder_width * 1.00 and
-                    hip_width * 0.70 <= waist_from_elbows <= hip_width * 1.05):
-                print(f"   Waist via elbow-gap: {waist_from_elbows:.1f}")
-                return float(waist_from_elbows)
-            else:
-                raise ValueError(f"Elbow waist {waist_from_elbows:.1f} out of bounds")
-        except Exception as ex:
-            print(f"   Elbow strategy failed: {ex}")
-
-        # ── Strategy 2: Edge detection at waist zone ──────────────────────
-        try:
-            # Try both 45% and 52% torso positions
-            for frac in [0.45, 0.52, 0.40]:
-                waist_y = int(shoulder_y + (hip_y - shoulder_y) * frac)
-                band = max(5, int(h * 0.04))
-                y1 = max(0, waist_y - band)
-                y2 = min(h, waist_y + band)
-
-                ls_x = int(left_shoulder.x * w)
-                rs_x = int(right_shoulder.x * w)
-                margin = int(w * 0.05)
-                x_left  = max(0, min(ls_x, rs_x) - margin)
-                x_right = min(w, max(ls_x, rs_x) + margin)
-
-                roi = image[y1:y2, x_left:x_right]
-                if roi.size == 0:
-                    continue
-
-                waist_px = self._edge_width(roi)
-                if waist_px is None:
-                    continue
-
-                # Relaxed sanity: 60%–100% of shoulder width
-                if shoulder_width * 0.60 <= waist_px <= shoulder_width * 1.00:
-                    print(f"   Waist via edge detection (frac={frac}): {waist_px:.1f}")
-                    return float(waist_px)
-
-            raise ValueError("Edge detection: no valid result at any fraction")
-        except Exception as ex:
-            print(f"   Edge strategy failed: {ex}")
-
-        # ── Strategy 3: Hip-based geometric interpolation ─────────────────
-        # WHR of 0.80 is a reasonable average; avoids the old shoulder*0.82 bug
-        # which was shoulder-anchored and caused Apple misclassification
-        waist_fallback = hip_width * 0.80
-        print(f"   Waist via hip interpolation fallback: {waist_fallback:.1f}")
-        return float(waist_fallback)
-
-    def _edge_width(self, roi: np.ndarray) -> Optional[float]:
-        """
-        Run Canny edge detection on roi and return the 10–90th percentile
-        column span. Returns None if fewer than 5 edge columns found.
-        """
-        gray  = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        blur  = cv2.GaussianBlur(gray, (5, 5), 0)
-        # Try adaptive threshold — better for solid/low-contrast garments
-        edges = cv2.Canny(blur, 20, 80)
-
-        cols_with_edges = np.where(edges.sum(axis=0) > 0)[0]
-        if len(cols_with_edges) < 5:
-            return None
-
-        left_edge  = np.percentile(cols_with_edges, 10)
-        right_edge = np.percentile(cols_with_edges, 90)
-        return float(right_edge - left_edge)
-
-    def _classify_body_type(self, s_h: float, w_h: float, b_w: float) -> Tuple[str, float]:
-        """
-        Classify body type using THREE measurements for much higher accuracy.
-
-        Parameters
-        ----------
-        s_h : shoulder(bust)_width / hip_width
-              > 1.0  → top-heavy
-              < 1.0  → bottom-heavy (pear)
-              ~1.0   → balanced
-
-        w_h : waist_width / hip_width
-              < 0.75 → well-defined waist
-              > 0.85 → straighter / fuller midsection
-
-        b_w : bust_width / waist_width
-              > 1.20 → pronounced waist definition (hourglass signal)
-              < 1.10 → minimal waist definition
-
-        Classification Logic (priority order)
-        ──────────────────────────────────────────────────────────────────────
-        PEAR              s_h < 0.92
-                          Hips clearly wider than shoulders/bust.
-
-        HOURGLASS         0.92 ≤ s_h ≤ 1.12  AND  w_h < 0.78  AND  b_w > 1.18
-                          Balanced top/bottom, clearly nipped waist.
-
-        INVERTED TRIANGLE s_h > 1.18  AND  w_h < 0.88
-                          Significantly broader shoulders, waist not overly wide.
-
-        APPLE             s_h > 1.08  AND  w_h > 0.88
-                          Broad top AND wide/full waist (carries weight in middle).
-
-        RECTANGLE         0.88 ≤ s_h ≤ 1.18  AND  0.78 ≤ w_h ≤ 0.92
-                          Balanced proportions, minimal waist definition.
-                          (Most common — wide fallback band)
-
-        FALLBACK          Rectangle
-        ──────────────────────────────────────────────────────────────────────
-
-        KEY FIX vs old code:
-        - Apple threshold raised from w_h ≥ 0.90 → w_h > 0.88  (same)
-          BUT s_h raised from > 1.10 → > 1.08, making Apple harder to trigger.
-        - Rectangle now explicitly catches 0.88–1.18 S/H range, which is where
-          most "normal" bodies (including the olive-dress image) fall.
-        - Hourglass requires bust_waist ratio > 1.18 as a THIRD condition,
-          preventing false hourglass from slightly low W/H alone.
-        """
-
-        print(f"   Classifying: s_h={s_h:.3f}  w_h={w_h:.3f}  b_w={b_w:.3f}")
-
-        # 1. PEAR — hips clearly wider than bust/shoulders
-        if s_h < 0.92:
-            return "Pear", 0.88
-
-        # 2. HOURGLASS — balanced shoulders & hips, pronounced waist nip
-        if 0.92 <= s_h <= 1.12 and w_h < 0.78 and b_w > 1.18:
-            return "Hourglass", 0.90
-
-        # 3. INVERTED TRIANGLE — shoulders dominate, waist reasonably defined
-        if s_h > 1.18 and w_h < 0.88:
-            return "Inverted Triangle", 0.87
-
-        # 4. APPLE — broad top AND wide/full waist
-        #    Requires BOTH conditions to be clearly met — avoids false positives
-        if s_h > 1.12 and w_h > 0.88:
-            return "Apple", 0.85
-
-        # 5. RECTANGLE — balanced all around, moderate waist definition
-        #    Widened band: catches most average/athletic builds correctly
-        if 0.88 <= s_h <= 1.18 and 0.72 <= w_h <= 0.92:
-            return "Rectangle", 0.85
-
-        # 6. FALLBACK — Rectangle is statistically the most common body type
-        return "Rectangle", 0.72
+    # =====================================================
+    # HEIGHT CLASSIFICATION
+    # =====================================================
 
     def _classify_height(self, leg_torso_ratio: float) -> str:
-        """
-        Classify height from leg-to-torso ratio.
-        > 1.35  → Tall
-        < 1.00  → Petite
-        else    → Average
-        """
-        if leg_torso_ratio > 1.35:
+        if leg_torso_ratio > 1.40:
             return "Tall"
-        elif leg_torso_ratio < 1.0:
+        if leg_torso_ratio < 1.05:
             return "Petite"
-        else:
-            return "Average"
+        return "Average"
+
+    # =====================================================
+    # SKIN TONE DETECTION
+    # =====================================================
+
+    def detect_skin_tone(
+        self,
+        bgr_image: np.ndarray,
+        rgb_image: Optional[np.ndarray] = None,
+    ) -> Tuple[str, float]:
+        """
+        1. MediaPipe FaceDetection bbox → sample central cheek/forehead area.
+        2. Fall back to multi-candidate upper-centre scan.
+        3. Dual HSV + YCrCb skin mask → sample only real skin pixels.
+        4. CIE L* (lightness) + A* (warm/cool) → classify tone.
+
+        Tone labels: Fair | Light Medium | Medium | Tan | Deep
+        """
+        try:
+            h, w = bgr_image.shape[:2]
+
+            if rgb_image is None:
+                rgb_image = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2RGB)
+
+            face_crop = self._extract_face_region(rgb_image, h, w)
+
+            if face_crop is None or face_crop.size == 0:
+                print("⚠️  No face bbox — scanning upper region")
+                face_crop = self._fallback_face_crop(bgr_image, h, w)
+
+            if face_crop is None or face_crop.size == 0:
+                return "Medium", 0.60
+
+            face_bgr     = cv2.cvtColor(face_crop, cv2.COLOR_RGB2BGR)
+            skin_mask    = _skin_mask(face_bgr)
+            masked_pixels = face_bgr[skin_mask]
+
+            if len(masked_pixels) < 30:
+                masked_pixels = face_bgr.reshape(-1, 3)
+
+            sample = masked_pixels.reshape(-1, 1, 3).astype(np.uint8)
+            lab    = cv2.cvtColor(sample, cv2.COLOR_BGR2LAB)
+
+            l_vals = lab[:, 0, 0].astype(float)
+            a_vals = lab[:, 0, 1].astype(float)
+
+            brightness = float(np.percentile(l_vals, 60))
+            warmth     = float(np.mean(a_vals))
+
+            print("\n========== SKIN ANALYSIS ==========")
+            print(f"Skin pixels : {len(masked_pixels)}")
+            print(f"L (raw)     : {brightness:.1f}")
+            print(f"A (raw)     : {warmth:.1f}")
+
+            tone, confidence = _map_tone(brightness, warmth)
+            print(f"Detected    : {tone}  (conf={confidence:.2f})")
+            return tone, confidence
+
+        except Exception as e:
+            print(f"❌ Skin tone error: {e}")
+            import traceback
+            traceback.print_exc()
+            return "Medium", 0.60
+
+    # ---- face region helpers -----------------------------------
+
+    def _extract_face_region(
+        self,
+        rgb_image: np.ndarray,
+        h: int,
+        w: int,
+    ) -> Optional[np.ndarray]:
+        try:
+            results = self.face_detector.process(rgb_image)
+            if not results.detections:
+                return None
+
+            det  = results.detections[0]
+            bbox = det.location_data.relative_bounding_box
+
+            x1 = max(0, int(bbox.xmin * w))
+            y1 = max(0, int(bbox.ymin * h))
+            x2 = min(w, int((bbox.xmin + bbox.width)  * w))
+            y2 = min(h, int((bbox.ymin + bbox.height) * h))
+
+            face_h = y2 - y1
+            face_w = x2 - x1
+
+            # Central 50% of face (skip hairline and jaw extremes)
+            cx1 = x1 + int(face_w * 0.25)
+            cx2 = x2 - int(face_w * 0.25)
+            cy1 = y1 + int(face_h * 0.15)
+            cy2 = y1 + int(face_h * 0.65)
+
+            crop = rgb_image[cy1:cy2, cx1:cx2]
+            return crop if crop.size > 0 else None
+
+        except Exception:
+            return None
+
+    def _fallback_face_crop(
+        self,
+        bgr_image: np.ndarray,
+        h: int,
+        w: int,
+    ) -> Optional[np.ndarray]:
+        """
+        Scan several upper-centre rectangles; pick whichever has the
+        most skin-coloured pixels.
+        """
+        best_crop  = None
+        best_count = 0
+
+        candidates = [
+            (0.05, 0.22, 0.38, 0.62),
+            (0.10, 0.28, 0.30, 0.70),
+            (0.03, 0.18, 0.40, 0.60),
+            (0.02, 0.15, 0.42, 0.58),
+        ]
+
+        for y_lo, y_hi, x_lo, x_hi in candidates:
+            x1, x2 = int(w * x_lo), int(w * x_hi)
+            y1, y2 = int(h * y_lo), int(h * y_hi)
+            crop   = bgr_image[y1:y2, x1:x2]
+            if crop.size == 0:
+                continue
+            mask  = _skin_mask(crop)
+            count = int(np.sum(mask))
+            if count > best_count:
+                best_count = count
+                best_crop  = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+
+        return best_crop
 
 
-analyzer = BodyAnalyzer()
+# =========================================================
+# MODULE-LEVEL SKIN HELPERS
+# =========================================================
+
+def _skin_mask(bgr_crop: np.ndarray) -> np.ndarray:
+    """
+    Boolean mask for skin-coloured pixels.
+    Intersection of HSV and YCrCb ranges — robust across all tones.
+    """
+    hsv   = cv2.cvtColor(bgr_crop, cv2.COLOR_BGR2HSV)
+    ycrcb = cv2.cvtColor(bgr_crop, cv2.COLOR_BGR2YCrCb)
+
+    mask_hsv = cv2.inRange(
+        hsv,
+        np.array([0,  15,  50], dtype=np.uint8),
+        np.array([25, 200, 255], dtype=np.uint8),
+    )
+    mask_ycr = cv2.inRange(
+        ycrcb,
+        np.array([0,  133,  77], dtype=np.uint8),
+        np.array([255, 180, 135], dtype=np.uint8),
+    )
+    return cv2.bitwise_and(mask_hsv, mask_ycr).astype(bool)
+
+
+def _map_tone(brightness: float, warmth: float) -> Tuple[str, float]:
+    """
+    Map cv2 LAB brightness (0–255) + warmth (0–255, 128=neutral)
+    to a skin tone label.
+
+    CIE L* thresholds (converted from cv2's 0-255 scale → 0-100):
+      Fair         ≥ 68  (L* raw ≥ ~173)
+      Light Medium  58–67 (L* raw 148–171)
+      Medium        46–57 (L* raw 117–145)
+      Tan           34–45 (L* raw  87–115)
+      Deep          < 34  (L* raw  <  87)
+    """
+    L = brightness / 2.55          # cv2 L* 0-255 → CIE L* 0-100
+    A = warmth - 128.0             # signed warmth: + = red/warm
+
+    print(f"CIE L*={L:.1f}  A*={A:.1f}")
+
+    if L >= 70:
+        tone, conf = "Fair", 0.92
+    elif L >= 62:
+        tone, conf = ("Light Medium", 0.87) if A <= 6 else ("Fair", 0.85)
+    elif L >= 52:
+        tone, conf = "Light Medium", 0.88
+    elif L >= 42:
+        tone, conf = ("Medium", 0.87) if A > 8 else ("Light Medium", 0.84)
+    elif L >= 30:
+        tone, conf = "Medium", 0.87
+    elif L >= 20:
+        tone, conf = ("Tan", 0.86) if A > 5 else ("Medium", 0.84)
+    elif L >= 12:
+        tone, conf = "Tan", 0.85
+    else:
+        tone, conf = "Deep", 0.88
+
+    return tone, conf
+
+
+# =========================================================
+# SINGLETON  +  PUBLIC API
+# =========================================================
+
+_analyzer = BodyAnalyzer()
 
 
 def analyze_body_measurements(image: np.ndarray) -> Dict[str, Any]:
-    result = analyzer.analyze(image)
-    print(f"✅ Body Analysis Complete:")
-    print(f"   Body Type:       {result['body_type']} ({result['body_type_confidence']})")
-    print(f"   Height Category: {result['height_category']}")
-    print(f"   S/H Ratio:       {result['features']['shoulder_hip_ratio']}")
-    print(f"   W/H Ratio:       {result['features']['waist_hip_ratio']}")
-    print(f"   B/W Ratio:       {result['features']['bust_waist_ratio']}")
-    print(f"   Leg/Torso:       {result['features']['leg_torso_ratio']}")
+    """
+    Main entry point called by your FastAPI route.
+
+    Parameters
+    ----------
+    image : np.ndarray — BGR image (cv2.imread output or camera frame).
+                         Recommended minimum resolution: 480 × 640.
+                         Higher resolution (720p / 1080p) gives better
+                         landmark accuracy and cleaner skin samples.
+
+    Returns
+    -------
+    dict — body_type, skin_tone, height_category, confidences, features.
+    """
+    result = _analyzer.analyze(image)
+    print("\n✅ BODY ANALYSIS COMPLETE")
+    print(f"Body Type : {result['body_type']}  "
+          f"(conf={result['body_type_confidence']:.2f})")
+    print(f"Skin Tone : {result['skin_tone']}  "
+          f"(conf={result['skin_tone_confidence']:.2f})")
     return result
