@@ -5,10 +5,10 @@ import { Trash2, Heart, ShoppingBag, ArrowLeft } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 // ── Image component with fallback ─────────────────────────────────────────────
-function WishlistImage({ imageId }) {
+function WishlistImage({ imageUrl }) {
   const [error, setError] = useState(false);
 
-  if (!imageId || error) {
+  if (!imageUrl || error) {
     return (
       <div className="w-full h-full flex items-center justify-center text-6xl bg-gradient-to-br from-pink-200 via-rose-200 to-red-200">
         👗
@@ -18,7 +18,7 @@ function WishlistImage({ imageId }) {
 
   return (
     <img
-      src={`http://127.0.0.1:8000/user/image-file/${imageId}`}
+      src={imageUrl}
       alt="saved outfit"
       className="w-full h-full object-contain"
       onError={() => setError(true)}
@@ -256,7 +256,7 @@ export default function WishlistPage() {
               >
                 {/* Image */}
                 <div className="relative h-56 bg-gray-100 overflow-hidden flex items-center justify-center">
-                  <WishlistImage imageId={item.image_id} />
+                  <WishlistImage imageUrl={item.image_url} />
 
                   {/* Heart Badge */}
                   <div className="absolute top-3 right-3 bg-white rounded-full w-10 h-10 flex items-center justify-center shadow-lg z-10">

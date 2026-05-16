@@ -1,3 +1,7 @@
+// RecommendationsPage.jsx
+// Route this to: /recommendations
+// This is the outfit grid page — shows AI-recommended clothes after image upload.
+
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import axios from "axios";
@@ -28,10 +32,11 @@ const isDefault = (key, value) => value === INITIAL_FILTERS[key];
 
 // ── Skin tone colour suitability ──────────────────────────────────────────
 const SKIN_TONE_COLORS = {
-  Fair:    ["blue","pink","purple","red","green","black","white","grey"],
-  Medium:  ["red","blue","green","yellow","brown","white","black","orange"],
-  Tan:     ["white","yellow","orange","red","green","blue","brown","multi"],
-  Deep:    ["white","yellow","red","orange","green","blue","multi","pink"],
+  Fair:         ["blue","pink","purple","red","green","black","white","grey"],
+  "Light Medium":["blue","pink","purple","red","green","black","white","grey","orange"],
+  Medium:       ["red","blue","green","yellow","brown","white","black","orange"],
+  Tan:          ["white","yellow","orange","red","green","blue","brown","multi"],
+  Deep:         ["white","yellow","red","orange","green","blue","multi","pink"],
 };
 function isColorSuitable(color, skinTone) {
   if (!color || !skinTone) return true;
@@ -89,8 +94,8 @@ function OutfitImage({ src, alt }) {
 
 // ── Dropdown ──────────────────────────────────────────────────────────────
 function FilterDropdown({ id, emoji, options, value, onChange, openDropdown, setOpenDropdown, skinTone }) {
-  const isOpen  = openDropdown === id;
-  const isActive = !isDefault(id === "sleeve" ? "sleeve" : id, value);
+  const isOpen   = openDropdown === id;
+  const isActive = !isDefault(id, value);
   const colorUnsafe = id === "color" && !isDefault("color", value) && !isColorSuitable(value, skinTone);
 
   return (
@@ -110,7 +115,11 @@ function FilterDropdown({ id, emoji, options, value, onChange, openDropdown, set
         <ChevronDown className={`w-4 h-4 flex-shrink-0 transition-transform ${isOpen ? "rotate-180" : ""}`} />
       </button>
 
-      {colorUnsafe && <p className="text-xs text-red-500 mt-1 px-1 font-medium">Not ideal for your {skinTone} skin tone</p>}
+      {colorUnsafe && (
+        <p className="text-xs text-red-500 mt-1 px-1 font-medium">
+          Not ideal for your {skinTone} skin tone
+        </p>
+      )}
 
       <AnimatePresence>
         {isOpen && (
@@ -169,7 +178,7 @@ export default function RecommendationsPage() {
 
   // ── Load navigation state ─────────────────────────────────────────────
   useEffect(() => {
-    if (location.state) {
+    if (location.state?.selectedImageId) {
       setSelectedImageId(location.state.selectedImageId);
       setSelectedDetails(location.state.selectedDetails);
     }
@@ -179,7 +188,8 @@ export default function RecommendationsPage() {
   useEffect(() => {
     axios.get("http://127.0.0.1:8000/wishlist/get", { params: { user_id: "default_user" } })
       .then((res) => {
-        if (res.data.success) setWishlist(new Set((res.data.items||[]).map((i) => i.outfit_name)));
+        if (res.data.success)
+          setWishlist(new Set((res.data.items || []).map((i) => i.outfit_name)));
       })
       .catch((e) => console.error("Wishlist fetch:", e));
   }, []);
@@ -199,9 +209,9 @@ export default function RecommendationsPage() {
         const payload = {
           image_id:        selectedImageId,
           top_k:           100,
-          body_type:       selectedDetails.body_type,
-          skin_tone:       selectedDetails.skin_tone,
-          gender:          selectedDetails.gender || null,   // ← passed from homepage
+          body_type:       selectedDetails.body_type   || null,
+          skin_tone:       selectedDetails.skin_tone   || null,
+          gender:          selectedDetails.gender      || null,
           height_category: selectedDetails.height_category || "Average",
         };
 
@@ -211,7 +221,7 @@ export default function RecommendationsPage() {
 
         if (res.data.success) {
           setRecommendations(res.data.recommendations || []);
-          console.log(`✅ ${res.data.recommendations?.length} recs for gender=${res.data.gender}`);
+          console.log(`✅ ${res.data.recommendations?.length} recs for gender=${payload.gender}`);
         } else {
           setError(res.data.error || "Failed to generate recommendations");
         }
@@ -227,7 +237,10 @@ export default function RecommendationsPage() {
   }, [selectedImageId, selectedDetails]);
 
   // ── Filters ───────────────────────────────────────────────────────────
-  const filtered = useMemo(() => applyFilters(recommendations, filters), [filters, recommendations]);
+  const filtered = useMemo(
+    () => applyFilters(recommendations, filters),
+    [filters, recommendations]
+  );
 
   const handleFilterChange = useCallback((key, value) => {
     setFilters((prev) => ({ ...prev, [key]: value }));
@@ -243,28 +256,35 @@ export default function RecommendationsPage() {
     if (wishlistLoading.has(name)) return;
     setWishlistLoading((p) => new Set(p).add(name));
     const saved = wishlist.has(name);
-    setWishlist((p) => { const n = new Set(p); saved ? n.delete(name) : n.add(name); return n; });
+    setWishlist((p) => {
+      const n = new Set(p); saved ? n.delete(name) : n.add(name); return n;
+    });
     try {
       if (saved) {
-        await axios.post("http://127.0.0.1:8000/wishlist/remove", { user_id: "default_user", outfit_name: name });
+        await axios.post("http://127.0.0.1:8000/wishlist/remove",
+          { user_id: "default_user", outfit_name: name });
         showToast("Removed from wishlist", "error");
       } else {
         await axios.post("http://127.0.0.1:8000/wishlist/add", {
-          user_id: "default_user", outfit_name: name,
+          user_id:          "default_user",
+          outfit_name:      name,
+          outfit_id:        outfit.id || "",
           similarity_score: outfit.similarity_score || 0,
-          image_id: selectedImageId, occasion: outfit.occasion || "",
+          occasion:         outfit.occasion || "",
         });
         showToast("Saved to wishlist ❤️", "success");
       }
-    } catch (err) {
-      setWishlist((p) => { const n = new Set(p); saved ? n.add(name) : n.delete(name); return n; });
+    } catch {
+      setWishlist((p) => {
+        const n = new Set(p); saved ? n.add(name) : n.delete(name); return n;
+      });
       showToast("Something went wrong. Try again.", "error");
     } finally {
       setWishlistLoading((p) => { const n = new Set(p); n.delete(name); return n; });
     }
-  }, [wishlist, wishlistLoading, selectedImageId, showToast]);
+  }, [wishlist, wishlistLoading, showToast]);
 
-  // Close dropdowns on outside click
+  // ── Close dropdowns on outside click ─────────────────────────────────
   useEffect(() => {
     const close = () => setOpenDropdown(null);
     document.addEventListener("click", close);
@@ -275,13 +295,16 @@ export default function RecommendationsPage() {
   const skinTone = selectedDetails?.skin_tone || null;
   const gender   = selectedDetails?.gender    || null;
 
-  // ── Guard ─────────────────────────────────────────────────────────────
+  // ── Guard: no image passed — send back to upload ──────────────────────
+  // FIX: was showing UserDetails component instead of this page.
+  // Now we simply redirect back to /home if no state is present.
   if (!selectedImageId || !selectedDetails) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50 flex items-center justify-center p-6">
         <div className="text-center">
           <ShoppingBag className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-          <p className="text-2xl font-bold text-gray-900 mb-4">No Image Selected</p>
+          <p className="text-2xl font-bold text-gray-900 mb-2">No Image Selected</p>
+          <p className="text-gray-500 text-sm mb-6">Upload a photo first to get outfit recommendations.</p>
           <button onClick={() => navigate("/home")}
             className="px-6 py-3 bg-gradient-to-r from-pink-500 to-rose-500 text-white font-semibold rounded-xl hover:shadow-lg transition-all flex items-center gap-2 mx-auto">
             <ArrowLeft className="w-4 h-4" /> Back to Upload
@@ -297,9 +320,13 @@ export default function RecommendationsPage() {
       {/* Toast */}
       <AnimatePresence>
         {toast && (
-          <motion.div initial={{ opacity: 0, y: -40 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -40 }}
+          <motion.div
+            initial={{ opacity: 0, y: -40 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -40 }}
             className={`fixed top-5 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-5 py-3 rounded-full shadow-xl font-semibold text-sm
-              ${toast.type === "success" ? "bg-white text-gray-800 border border-green-200" : "bg-white text-gray-800 border border-red-200"}`}>
+              ${toast.type === "success"
+                ? "bg-white text-gray-800 border border-green-200"
+                : "bg-white text-gray-800 border border-red-200"}`}
+          >
             {toast.type === "success"
               ? <CheckCircle className="w-4 h-4 text-green-500" />
               : <Heart className="w-4 h-4 text-red-400" />}
@@ -313,10 +340,13 @@ export default function RecommendationsPage() {
         {/* Page header */}
         <div className="mb-6">
           <div className="flex items-center gap-4 mb-6">
-            <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }} onClick={() => navigate("/home")}
+            {/* FIX: back arrow goes to /home (upload), NOT to /recommendations (self-loop) */}
+            <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }}
+              onClick={() => navigate("/home")}
               className="p-2 bg-white hover:bg-gray-50 rounded-xl shadow-md transition-colors">
               <ArrowLeft className="w-5 h-5 text-gray-700" />
             </motion.button>
+
             <div>
               <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">👗 Your Recommendations</h1>
               <p className="text-sm text-gray-500 mt-0.5">
@@ -331,20 +361,25 @@ export default function RecommendationsPage() {
               </p>
             </div>
 
-            <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} onClick={() => navigate("/wishlist")}
+            <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
+              onClick={() => navigate("/wishlist")}
               className="ml-auto flex items-center gap-2 px-4 py-2 bg-white rounded-xl shadow-md text-sm font-semibold text-red-500 hover:bg-red-50 transition-colors">
               <Heart className="w-4 h-4 fill-red-500" /> Wishlist
               {wishlist.size > 0 && (
-                <span className="bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">{wishlist.size}</span>
+                <span className="bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                  {wishlist.size}
+                </span>
               )}
             </motion.button>
           </div>
 
-          {/* Stats */}
+          {/* Stats bar */}
           <div className="grid grid-cols-4 gap-3 mb-6">
             <div className="bg-white rounded-2xl shadow-sm p-4 border-l-4 border-blue-400">
               <p className="text-xs text-gray-500 uppercase tracking-wide font-semibold">Gender</p>
-              <p className="text-base font-bold text-blue-600 mt-0.5">{gender === "Female" ? "Women" : gender === "Male" ? "Men" : "—"}</p>
+              <p className="text-base font-bold text-blue-600 mt-0.5">
+                {gender === "Female" ? "Women" : gender === "Male" ? "Men" : "—"}
+              </p>
             </div>
             <div className="bg-white rounded-2xl shadow-sm p-4 border-l-4 border-purple-400">
               <p className="text-xs text-gray-500 uppercase tracking-wide font-semibold">Body Type</p>
@@ -357,18 +392,22 @@ export default function RecommendationsPage() {
             <div className="bg-gradient-to-br from-purple-500 to-pink-500 rounded-2xl shadow-sm p-4 text-white">
               <p className="text-xs text-white/70 uppercase tracking-wide font-semibold">Showing</p>
               <p className="text-lg font-bold mt-0.5">
-                {filtered.length}<span className="text-sm font-normal text-white/60"> / {recommendations.length}</span>
+                {filtered.length}
+                <span className="text-sm font-normal text-white/60"> / {recommendations.length}</span>
               </p>
             </div>
           </div>
 
           {/* Filter panel */}
-          <div className="bg-white rounded-2xl shadow-sm p-4 mb-6 border border-gray-100" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl shadow-sm p-4 mb-6 border border-gray-100"
+            onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-bold text-gray-900">🎨 Filter Results</h3>
               <div className="flex items-center gap-2">
                 {activeFilterCount > 0 && (
-                  <span className="text-xs bg-purple-100 text-purple-700 font-bold px-2 py-0.5 rounded-full">{activeFilterCount} active</span>
+                  <span className="text-xs bg-purple-100 text-purple-700 font-bold px-2 py-0.5 rounded-full">
+                    {activeFilterCount} active
+                  </span>
                 )}
                 {activeFilterCount > 0 && (
                   <button onClick={resetFilters}
@@ -390,9 +429,12 @@ export default function RecommendationsPage() {
               <div className="flex flex-wrap gap-1.5 mt-3 pt-3 border-t border-gray-100">
                 {Object.entries(filters).map(([key, value]) =>
                   !isDefault(key, value) ? (
-                    <span key={key} className="flex items-center gap-1 px-2.5 py-1 bg-purple-100 text-purple-700 rounded-full text-xs font-semibold">
+                    <span key={key}
+                      className="flex items-center gap-1 px-2.5 py-1 bg-purple-100 text-purple-700 rounded-full text-xs font-semibold">
                       <span className="capitalize">{value}</span>
-                      <button onClick={() => handleFilterChange(key, INITIAL_FILTERS[key])}><X className="w-3 h-3 hover:text-purple-900" /></button>
+                      <button onClick={() => handleFilterChange(key, INITIAL_FILTERS[key])}>
+                        <X className="w-3 h-3 hover:text-purple-900" />
+                      </button>
                     </span>
                   ) : null
                 )}
@@ -411,12 +453,15 @@ export default function RecommendationsPage() {
 
         {/* Error */}
         {error && !loading && (
-          <div className="bg-red-50 border border-red-200 text-red-700 px-5 py-4 rounded-xl mb-6 text-sm">⚠️ {error}</div>
+          <div className="bg-red-50 border border-red-200 text-red-700 px-5 py-4 rounded-xl mb-6 text-sm">
+            ⚠️ {error}
+          </div>
         )}
 
-        {/* Grid */}
+        {/* Outfit grid */}
         {!loading && !error && filtered.length > 0 && (
-          <motion.div layout className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 pb-12">
+          <motion.div layout
+            className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 pb-12">
             <AnimatePresence mode="popLayout">
               {filtered.map((outfit, index) => {
                 const inWishlist   = wishlist.has(outfit.outfit_name);
@@ -427,7 +472,8 @@ export default function RecommendationsPage() {
                 return (
                   <motion.div key={`${outfit.rank}-${outfit.outfit_name}`} layout
                     initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.9 }} transition={{ duration: 0.18, delay: Math.min(index * 0.025, 0.25) }}
+                    exit={{ opacity: 0, scale: 0.9 }}
+                    transition={{ duration: 0.18, delay: Math.min(index * 0.025, 0.25) }}
                     whileHover={{ y: -6, transition: { duration: 0.2 } }}
                     className="bg-white rounded-2xl overflow-hidden shadow-md hover:shadow-xl transition-shadow"
                   >
@@ -465,9 +511,21 @@ export default function RecommendationsPage() {
                     <div className="p-3">
                       <h3 className="font-bold text-gray-900 text-xs mb-2 truncate">{outfit.outfit_name}</h3>
                       <div className="flex flex-wrap gap-1 mb-2">
-                        {outfit.category && <span className="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full font-medium">{outfit.category}</span>}
-                        {outfit.occasion && <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-medium">{outfit.occasion}</span>}
-                        {outfit.sleeves && outfit.sleeves !== "unknown" && <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full capitalize font-medium">{outfit.sleeves}</span>}
+                        {outfit.category && (
+                          <span className="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full font-medium">
+                            {outfit.category}
+                          </span>
+                        )}
+                        {outfit.occasion && (
+                          <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-medium">
+                            {outfit.occasion}
+                          </span>
+                        )}
+                        {outfit.sleeves && outfit.sleeves !== "unknown" && (
+                          <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full capitalize font-medium">
+                            {outfit.sleeves}
+                          </span>
+                        )}
                         {outfit.color && (
                           <span className="flex items-center gap-1 text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-full font-medium">
                             <span className={`w-2.5 h-2.5 rounded-full ${dotClass}`} />
@@ -484,9 +542,12 @@ export default function RecommendationsPage() {
                       )}
 
                       <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                        <motion.div initial={{ width: 0 }} animate={{ width: `${outfit.similarity_score * 100}%` }}
+                        <motion.div
+                          initial={{ width: 0 }}
+                          animate={{ width: `${outfit.similarity_score * 100}%` }}
                           transition={{ duration: 0.7, delay: index * 0.025 }}
-                          className="h-full bg-gradient-to-r from-purple-400 to-pink-500 rounded-full" />
+                          className="h-full bg-gradient-to-r from-purple-400 to-pink-500 rounded-full"
+                        />
                       </div>
                     </div>
                   </motion.div>
@@ -501,7 +562,9 @@ export default function RecommendationsPage() {
           <div className="text-center py-20">
             <ShoppingBag className="w-14 h-14 text-gray-200 mx-auto mb-4" />
             <p className="text-xl font-bold text-gray-800 mb-2">No Matches Found</p>
-            <p className="text-gray-400 text-sm mb-6 max-w-xs mx-auto">No outfits match your current filters. Try removing some.</p>
+            <p className="text-gray-400 text-sm mb-6 max-w-xs mx-auto">
+              No outfits match your current filters. Try removing some.
+            </p>
             <button onClick={resetFilters}
               className="px-6 py-2.5 bg-gradient-to-r from-purple-500 to-pink-500 text-white font-semibold rounded-xl hover:shadow-lg transition-all">
               Clear All Filters
@@ -509,12 +572,14 @@ export default function RecommendationsPage() {
           </div>
         )}
 
-        {/* No recommendations */}
+        {/* No recommendations at all */}
         {!loading && !error && recommendations.length === 0 && (
           <div className="text-center py-20">
             <ShoppingBag className="w-14 h-14 text-gray-200 mx-auto mb-4" />
             <p className="text-xl font-bold text-gray-800 mb-1">No Recommendations Found</p>
-            <p className="text-gray-400 text-sm">Make sure your outfit database is populated and gender filter matches.</p>
+            <p className="text-gray-400 text-sm">
+              Make sure your outfit database is populated and the gender filter matches.
+            </p>
           </div>
         )}
 

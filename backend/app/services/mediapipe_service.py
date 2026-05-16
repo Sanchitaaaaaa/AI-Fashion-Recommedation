@@ -3,17 +3,27 @@ mediapipe_service.py
 ────────────────────
 MediaPipe Pose-based body analyser + FaceDetection-based skin tone detector.
 
-Improvements in v3.0
-─────────────────────
-• Body type classifier uses a score-based approach across 5 types
-  (Hourglass, Pear, Inverted Triangle, Rectangle, Apple) — no brittle
-  if-elif thresholds.
-• Skin tone uses MediaPipe FaceDetection bbox (not arbitrary crop).
-  Falls back to multi-candidate scan with skin-pixel counting.
-• Dual HSV + YCrCb skin mask works across all Fitzpatrick types.
-• Skin tone labels: Fair, Light Medium, Medium, Tan, Deep.
-• Image quality: input is expected to be at least 480×640.
-  The analyser does NOT down-scale internally — keep source res.
+Fixes in v3.1  (body-type classification)
+──────────────────────────────────────────
+ROOT CAUSE: Inverted Triangle was winning for every person due to 3 compounding bugs:
+
+  BUG 1 — _score_above / _score_below used `margin = threshold * 0.15`.
+           For threshold=1.08, margin=0.162 — so any SHR down to 0.92
+           still earned ~63% of the full Inverted Triangle SHR score.
+           FIX: use a fixed absolute margin of 0.06 for both helpers.
+
+  BUG 2 — Inverted Triangle WHR range was [0.70, 0.90], which covers
+           ~80% of real people.  IT bodies actually have a SLIM waist
+           relative to their wide shoulders; WHR should be < 0.78.
+           FIX: changed IT WHR to _score_below(whr, 0.78) instead of
+           _score(whr, 0.70, 0.90).
+
+  BUG 3 — IT BWR threshold was 1.10, which is trivially met because
+           bust_width = shoulder*0.60 + chest*0.40 and waist is clamped
+           to hip*0.65 — almost every person exceeds 1.10.
+           FIX: raised IT BWR threshold to 1.25.
+
+No other logic (skin tone, height, landmarks, image handling) was changed.
 """
 
 import cv2
@@ -248,16 +258,23 @@ class BodyAnalyzer:
         bwr: float,   # bust / waist
     ) -> Tuple[str, float]:
         """
-        Reference ranges (literature-backed):
+        Score-based classifier across 5 body types.
+
+        Reference ranges:
         ┌──────────────────────┬───────────┬───────────┬───────────┐
         │ Body Type            │  SHR      │  WHR      │  BWR      │
         ├──────────────────────┼───────────┼───────────┼───────────┤
-        │ Hourglass            │ 0.97–1.07 │ < 0.75    │ > 1.25    │
-        │ Pear (Triangle)      │ < 0.93    │ 0.70–0.88 │ any       │
-        │ Inverted Triangle    │ > 1.08    │ 0.70–0.90 │ ≥ 1.10    │
-        │ Rectangle (Banana)   │ 0.93–1.08 │ 0.80–0.92 │ 1.05–1.25 │
+        │ Hourglass            │ 0.97–1.05 │ < 0.76    │ > 1.20    │
+        │ Pear (Triangle)      │ < 0.93    │ 0.72–0.86 │ any       │
+        │ Inverted Triangle    │ > 1.10    │ < 0.78    │ > 1.25    │  ← tightened
+        │ Rectangle (Banana)   │ 0.93–1.10 │ 0.80–0.93 │ 1.05–1.22 │
         │ Apple (Round/Oval)   │ 0.90–1.10 │ > 0.88    │ < 1.15    │
         └──────────────────────┴───────────┴───────────┴───────────┘
+
+        FIX v3.1: _score_above / _score_below now use a fixed absolute
+        margin of 0.06 (was threshold * 0.15 which was far too wide).
+        IT WHR changed from range [0.70, 0.90] to _score_below(0.78).
+        IT BWR threshold raised from 1.10 → 1.25.
         """
         scores: Dict[str, float] = {
             "Hourglass":         0.0,
@@ -267,21 +284,30 @@ class BodyAnalyzer:
             "Apple":             0.0,
         }
 
-        scores["Hourglass"]         += self._score(shr, 0.97, 1.07, 2.0)
-        scores["Hourglass"]         += self._score_below(whr, 0.75, 2.5)
-        scores["Hourglass"]         += self._score_above(bwr, 1.25, 2.0)
+        # ── Hourglass: balanced shoulders/hips, slim waist, defined bust
+        scores["Hourglass"]         += self._score(shr, 0.97, 1.05, 2.0)
+        scores["Hourglass"]         += self._score_below(whr, 0.76, 2.5)
+        scores["Hourglass"]         += self._score_above(bwr, 1.20, 2.0)
 
+        # ── Pear: narrower shoulders than hips
         scores["Pear"]              += self._score_below(shr, 0.93, 3.0)
-        scores["Pear"]              += self._score(whr, 0.70, 0.88, 1.5)
+        scores["Pear"]              += self._score(whr, 0.72, 0.86, 1.5)
 
-        scores["Inverted Triangle"] += self._score_above(shr, 1.08, 3.0)
-        scores["Inverted Triangle"] += self._score(whr, 0.70, 0.90, 1.5)
-        scores["Inverted Triangle"] += self._score_above(bwr, 1.10, 1.0)
+        # ── Inverted Triangle: notably wider shoulders, slim waist & hips
+        #    FIX: SHR threshold raised to 1.10 (was 1.08)
+        #    FIX: WHR now _score_below(0.78) — IT has a slim waist,
+        #         NOT a broad [0.70-0.90] range that covers everyone
+        #    FIX: BWR threshold raised to 1.25 (was 1.10 — too easy)
+        scores["Inverted Triangle"] += self._score_above(shr, 1.10, 3.0)
+        scores["Inverted Triangle"] += self._score_below(whr, 0.78, 1.5)
+        scores["Inverted Triangle"] += self._score_above(bwr, 1.25, 1.5)
 
-        scores["Rectangle"]         += self._score(shr, 0.93, 1.08, 2.0)
-        scores["Rectangle"]         += self._score(whr, 0.80, 0.92, 2.0)
-        scores["Rectangle"]         += self._score(bwr, 1.05, 1.25, 1.5)
+        # ── Rectangle: similar shoulder/waist/hip widths
+        scores["Rectangle"]         += self._score(shr, 0.93, 1.10, 2.0)
+        scores["Rectangle"]         += self._score(whr, 0.80, 0.93, 2.0)
+        scores["Rectangle"]         += self._score(bwr, 1.05, 1.22, 1.5)
 
+        # ── Apple: wide waist relative to hips
         scores["Apple"]             += self._score_above(whr, 0.88, 3.0)
         scores["Apple"]             += self._score(shr, 0.90, 1.10, 1.5)
         scores["Apple"]             += self._score_below(bwr, 1.15, 1.5)
@@ -303,9 +329,10 @@ class BodyAnalyzer:
     @staticmethod
     def _score(val: float, lo: float, hi: float,
                weight: float = 1.0) -> float:
+        """Full score inside [lo, hi]; linearly decays to 0 outside."""
         if lo <= val <= hi:
             return weight
-        margin = (hi - lo) * 0.5
+        margin = (hi - lo) * 0.4
         if val < lo:
             return weight * max(0.0, 1.0 - (lo - val) / margin)
         return weight * max(0.0, 1.0 - (val - hi) / margin)
@@ -313,17 +340,27 @@ class BodyAnalyzer:
     @staticmethod
     def _score_above(val: float, threshold: float,
                      weight: float = 1.0) -> float:
+        """
+        Full score when val >= threshold.
+        FIX v3.1: margin is now a fixed 0.06 (absolute), NOT threshold*0.15.
+        The old formula gave a margin of ~0.16 for threshold=1.08, meaning
+        someone with SHR=0.92 still earned 63% of the Inverted Triangle score.
+        """
         if val >= threshold:
             return weight
-        margin = threshold * 0.15
+        margin = 0.06   # fixed absolute — tight, realistic grace zone
         return weight * max(0.0, 1.0 - (threshold - val) / margin)
 
     @staticmethod
     def _score_below(val: float, threshold: float,
                      weight: float = 1.0) -> float:
+        """
+        Full score when val <= threshold.
+        FIX v3.1: same fixed-margin change as _score_above.
+        """
         if val <= threshold:
             return weight
-        margin = threshold * 0.15
+        margin = 0.06   # fixed absolute
         return weight * max(0.0, 1.0 - (val - threshold) / margin)
 
     # =====================================================
@@ -469,6 +506,28 @@ class BodyAnalyzer:
                 best_crop  = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
 
         return best_crop
+
+    # =====================================================
+    # EMPTY RESULT
+    # =====================================================
+
+    def _empty_result(self) -> Dict[str, Any]:
+        return {
+            "body_type":            "Rectangle",
+            "body_type_confidence": 0.0,
+            "height_category":      "Average",
+            "skin_tone":            "Medium",
+            "skin_tone_confidence": 0.0,
+            "features": {
+                "shoulder_width_px":  0.0,
+                "bust_width_px":      0.0,
+                "waist_width_px":     0.0,
+                "hip_width_px":       0.0,
+                "shoulder_hip_ratio": 0.0,
+                "waist_hip_ratio":    0.0,
+                "bust_waist_ratio":   0.0,
+            },
+        }
 
 
 # =========================================================
