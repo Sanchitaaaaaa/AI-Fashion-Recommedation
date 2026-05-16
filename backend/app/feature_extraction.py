@@ -1,71 +1,66 @@
-# =========================================================
-# FILE: app/feature_extraction.py
-# =========================================================
+# ============================================================
+# FILE: backend/app/feature_extraction.py
+# ============================================================
 
 import os
 import pickle
 import numpy as np
 import pandas as pd
-import cv2
 
 from tqdm import tqdm
 
 from tensorflow.keras.applications.mobilenet_v2 import (
-
     MobileNetV2,
     preprocess_input
 )
 
-from tensorflow.keras.preprocessing.image import img_to_array
+from tensorflow.keras.preprocessing import image
 
 from tensorflow.keras.models import Model
-
 from tensorflow.keras.layers import GlobalAveragePooling2D
 
-# =========================================================
+# ============================================================
 # PATHS
-# =========================================================
+# ============================================================
 
-DATASET_PATH = "fashion_dataset"
+BASE_DIR = "fashion_dataset"
 
-FILTERED_IMAGES = os.path.join(
-    DATASET_PATH,
-    "filtered_images"
-)
-
-FILTERED_CSV = os.path.join(
-    DATASET_PATH,
+CSV_PATH = os.path.join(
+    BASE_DIR,
     "filtered_styles.csv"
 )
 
-OUTPUT_PATH = "storage"
+IMAGES_DIR = os.path.join(
+    BASE_DIR,
+    "filtered_images"
+)
+
+STORAGE_DIR = "storage"
 
 FEATURES_FILE = os.path.join(
-    OUTPUT_PATH,
-    "image_features.pkl"
+    STORAGE_DIR,
+    "features.pkl"
 )
 
 METADATA_FILE = os.path.join(
-    OUTPUT_PATH,
+    STORAGE_DIR,
     "metadata.pkl"
 )
 
+# ============================================================
+# CREATE STORAGE
+# ============================================================
+
 os.makedirs(
-    OUTPUT_PATH,
+    STORAGE_DIR,
     exist_ok=True
 )
 
-# =========================================================
-# IMAGE SETTINGS
-# =========================================================
-
-IMAGE_SIZE = (224, 224)
-
-# =========================================================
+# ============================================================
 # LOAD MODEL
-# =========================================================
+# ============================================================
 
-print("Loading MobileNetV2 model...")
+print("\nLoading MobileNetV2 model...")
 
 base_model = MobileNetV2(
 
@@ -85,214 +80,222 @@ model = Model(
     )
 )
 
-print("✅ Model loaded")
+print("✅ MobileNetV2 loaded")
 
-# =========================================================
+# ============================================================
 # LOAD CSV
-# =========================================================
+# ============================================================
 
 print("\nLoading filtered CSV...")
 
-df = pd.read_csv(
-    FILTERED_CSV
-)
+df = pd.read_csv(CSV_PATH)
 
-print(f"Total rows : {len(df)}")
+print(f"Rows loaded : {len(df)}")
 
-# =========================================================
-# VALID IMAGE FILES
-# =========================================================
+# ============================================================
+# VALIDATE REQUIRED COLUMNS
+# ============================================================
 
-image_files = [
+required_columns = [
 
-    f for f in os.listdir(
-        FILTERED_IMAGES
-    )
-
-    if f.lower().endswith(
-
-        (
-            ".jpg",
-            ".jpeg",
-            ".png",
-            ".webp"
-        )
-    )
+    "id",
+    "gender",
+    "articleType",
+    "baseColour",
+    "usage",
+    "image_file",
+    "productDisplayName",
 ]
 
-print(f"Valid image files : {len(image_files)}")
+for col in required_columns:
 
-# =========================================================
-# FEATURE EXTRACTION
-# =========================================================
+    if col not in df.columns:
 
-features = []
+        raise Exception(
+            f"❌ Missing column: {col}"
+        )
 
-metadata = []
+# ============================================================
+# FEATURE EXTRACTION FUNCTION
+# ============================================================
 
-# =========================================================
-# IMAGE PREPROCESS
-# =========================================================
-
-def preprocess_image(image_path):
+def extract_features(img_path):
 
     try:
 
-        image = cv2.imread(image_path)
+        img = image.load_img(
 
-        if image is None:
-            return None
+            img_path,
 
-        image = cv2.cvtColor(
-            image,
-            cv2.COLOR_BGR2RGB
+            target_size=(224, 224)
         )
 
-        image = cv2.resize(
-            image,
-            IMAGE_SIZE
-        )
+        img_array = image.img_to_array(img)
 
-        image = img_to_array(image)
-
-        image = np.expand_dims(
-            image,
+        img_array = np.expand_dims(
+            img_array,
             axis=0
         )
 
-        image = preprocess_input(
-            image
+        img_array = preprocess_input(
+            img_array
         )
 
-        return image
+        features = model.predict(
+            img_array,
+            verbose=0
+        )[0]
+
+        # ====================================================
+        # NORMALIZE VECTOR
+        # ====================================================
+
+        features = features / np.linalg.norm(
+            features
+        )
+
+        return features
 
     except Exception as e:
 
         print(
-            f"❌ Preprocess error: {e}"
+            f"❌ Error extracting features "
+            f"from {img_path}: {e}"
         )
 
         return None
 
-# =========================================================
-# EXTRACT LOOP
-# =========================================================
+# ============================================================
+# LISTS
+# ============================================================
+
+all_features = []
+
+all_metadata = []
+
+# ============================================================
+# PROCESS DATASET
+# ============================================================
 
 print("\nExtracting features...\n")
 
-for image_file in tqdm(image_files):
+for _, row in tqdm(
+
+    df.iterrows(),
+
+    total=len(df)
+):
 
     try:
 
+        image_file = row["image_file"]
+
         image_path = os.path.join(
-            FILTERED_IMAGES,
+            IMAGES_DIR,
             image_file
         )
 
-        processed = preprocess_image(
+        # ====================================================
+        # CHECK FILE EXISTS
+        # ====================================================
+
+        if not os.path.exists(image_path):
+
+            continue
+
+        # ====================================================
+        # EXTRACT EMBEDDING
+        # ====================================================
+
+        embedding = extract_features(
             image_path
         )
 
-        if processed is None:
+        if embedding is None:
             continue
 
-        # =================================================
-        # FEATURE VECTOR
-        # =================================================
+        # ====================================================
+        # SAVE FEATURES
+        # ====================================================
 
-        embedding = model.predict(
-            processed,
-            verbose=0
-        )[0]
-
-        embedding = embedding / np.linalg.norm(
+        all_features.append(
             embedding
         )
 
-        features.append(
-            embedding
+        # ====================================================
+        # METADATA
+        # ====================================================
+
+        metadata = {
+
+            "id":
+
+                str(row["id"]),
+
+            "image_file":
+
+                image_file,
+
+            "productDisplayName":
+
+                row["productDisplayName"],
+
+            "gender":
+
+                row["gender"],
+
+            "articleType":
+
+                row["articleType"],
+
+            "baseColour":
+
+                row["baseColour"],
+
+            "usage":
+
+                row["usage"],
+
+            "embedding":
+
+                embedding.tolist(),
+
+            # ================================================
+            # OPTIONAL RECOMMENDATION TAGS
+            # ================================================
+
+            "recommended_body_type": [
+
+                "Rectangle",
+                "Pear",
+                "Hourglass",
+            ],
+
+            "recommended_skin_tone": [
+
+                "Fair",
+                "Light Medium",
+                "Medium",
+            ],
+        }
+
+        all_metadata.append(
+            metadata
         )
-
-        # =================================================
-        # IMAGE ID
-        # =================================================
-
-        image_id = os.path.splitext(
-            image_file
-        )[0]
-
-        # =================================================
-        # CSV MATCH
-        # =================================================
-
-        row = df[
-            df["id"].astype(str)
-            == str(image_id)
-        ]
-
-        if len(row) == 0:
-            continue
-
-        row = row.iloc[0]
-
-        metadata.append({
-
-            "id": str(image_id),
-
-            "image_file": image_file,
-
-            "gender": str(
-                row.get("gender", "")
-            ),
-
-            "masterCategory": str(
-                row.get("masterCategory", "")
-            ),
-
-            "subCategory": str(
-                row.get("subCategory", "")
-            ),
-
-            "articleType": str(
-                row.get("articleType", "")
-            ),
-
-            "baseColour": str(
-                row.get("baseColour", "")
-            ),
-
-            "season": str(
-                row.get("season", "")
-            ),
-
-            "usage": str(
-                row.get("usage", "")
-            ),
-        })
 
     except Exception as e:
 
         print(
-            f"❌ Feature extraction failed: {e}"
+            f"❌ Error processing row: {e}"
         )
 
-# =========================================================
-# CONVERT TO NUMPY
-# =========================================================
+        continue
 
-features = np.array(
-    features
-)
-
-print("\n========== SUMMARY ==========")
-
-print(f"Feature vectors : {len(features)}")
-
-print(f"Metadata rows   : {len(metadata)}")
-
-# =========================================================
+# ============================================================
 # SAVE FEATURES
-# =========================================================
+# ============================================================
+
+print("\nSaving features...")
 
 with open(
     FEATURES_FILE,
@@ -300,17 +303,15 @@ with open(
 ) as f:
 
     pickle.dump(
-        features,
+        all_features,
         f
     )
 
-print(
-    f"\n✅ Features saved -> {FEATURES_FILE}"
-)
-
-# =========================================================
+# ============================================================
 # SAVE METADATA
-# =========================================================
+# ============================================================
+
+print("Saving metadata...")
 
 with open(
     METADATA_FILE,
@@ -318,12 +319,29 @@ with open(
 ) as f:
 
     pickle.dump(
-        metadata,
+        all_metadata,
         f
     )
 
+# ============================================================
+# DONE
+# ============================================================
+
+print("\n===================================")
+print("✅ FEATURE EXTRACTION COMPLETE")
+print("===================================")
+
 print(
-    f"✅ Metadata saved -> {METADATA_FILE}"
+    f"Total embeddings : "
+    f"{len(all_features)}"
 )
 
-print("\n🎉 Feature extraction completed!")
+print(
+    f"Features saved -> "
+    f"{FEATURES_FILE}"
+)
+
+print(
+    f"Metadata saved -> "
+    f"{METADATA_FILE}"
+)

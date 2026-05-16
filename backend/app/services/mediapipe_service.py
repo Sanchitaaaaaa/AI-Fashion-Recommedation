@@ -27,157 +27,90 @@ No other logic (skin tone, height, landmarks, image handling) was changed.
 """
 
 import cv2
-import mediapipe as mp
 import numpy as np
+import mediapipe as mp
 
-from typing import Dict, Any, Tuple, Optional
+from app.services.body_shape_model import (
+    analyze_body_shape
+)
 
-# =========================================================
-# MEDIAPIPE INIT
-# =========================================================
+# ============================================================
+# MEDIAPIPE SETUP
+# ============================================================
 
 mp_pose = mp.solutions.pose
-mp_face = mp.solutions.face_detection
 
-VISIBILITY_THRESHOLD = 0.55
+pose = mp_pose.Pose(
 
+    static_image_mode=True,
 
-# =========================================================
-# HELPERS
-# =========================================================
+    model_complexity=2,
 
-def _px(lm, w: int, h: int) -> Tuple[float, float]:
-    return lm.x * w, lm.y * h
+    enable_segmentation=True,
 
+    min_detection_confidence=0.5,
+)
 
-def _mid(a: Tuple, b: Tuple) -> Tuple[float, float]:
-    return (a[0] + b[0]) / 2, (a[1] + b[1]) / 2
+# ============================================================
+# SKIN TONE DETECTION
+# ============================================================
 
+def detect_skin_tone(image):
 
-def _dist_x(a: Tuple, b: Tuple) -> float:
-    return abs(a[0] - b[0])
+    try:
 
+        # ====================================================
+        # RGB CONVERSION
+        # ====================================================
 
-def _dist_y(a: Tuple, b: Tuple) -> float:
-    return abs(a[1] - b[1])
-
-
-def _visible(*lms) -> bool:
-    return all(lm.visibility >= VISIBILITY_THRESHOLD for lm in lms)
-
-
-# =========================================================
-# BODY ANALYZER CLASS
-# =========================================================
-
-class BodyAnalyzer:
-
-    def __init__(self):
-        self.pose = mp_pose.Pose(
-            static_image_mode=True,
-            model_complexity=2,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5,
-        )
-        self.face_detector = mp_face.FaceDetection(
-            model_selection=1,            # long-range model
-            min_detection_confidence=0.4,
+        rgb = cv2.cvtColor(
+            image,
+            cv2.COLOR_BGR2RGB
         )
 
-    # =====================================================
-    # MAIN ENTRY POINT
-    # =====================================================
+        # ====================================================
+        # MEDIAPIPE RESULTS
+        # ====================================================
 
-    def analyze(self, image: np.ndarray) -> Dict[str, Any]:
-        """
-        Parameters
-        ----------
-        image : np.ndarray  — BGR image from cv2 / camera.
+        results = pose.process(rgb)
 
-        Returns
-        -------
-        dict with body_type, skin_tone, height_category, confidences,
-        and detailed measurement features.
-        """
-        try:
-            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            h, w, _   = image.shape
-            results   = self.pose.process(image_rgb)
+        if not results.pose_landmarks:
 
-            if not results.pose_landmarks:
-                print("❌ No body detected by MediaPipe Pose")
-                return self._empty_result()
+            return "Medium"
 
-            lm = results.pose_landmarks.landmark
+        landmarks = (
+            results.pose_landmarks.landmark
+        )
 
-            # ── Key landmarks ──────────────────────────────────
-            l_shoulder = lm[mp_pose.PoseLandmark.LEFT_SHOULDER]
-            r_shoulder = lm[mp_pose.PoseLandmark.RIGHT_SHOULDER]
-            l_hip      = lm[mp_pose.PoseLandmark.LEFT_HIP]
-            r_hip      = lm[mp_pose.PoseLandmark.RIGHT_HIP]
-            l_ankle    = lm[mp_pose.PoseLandmark.LEFT_ANKLE]
-            r_ankle    = lm[mp_pose.PoseLandmark.RIGHT_ANKLE]
-            l_knee     = lm[mp_pose.PoseLandmark.LEFT_KNEE]
-            r_knee     = lm[mp_pose.PoseLandmark.RIGHT_KNEE]
-            l_wrist    = lm[mp_pose.PoseLandmark.LEFT_WRIST]
-            r_wrist    = lm[mp_pose.PoseLandmark.RIGHT_WRIST]
-            nose       = lm[mp_pose.PoseLandmark.NOSE]
+        h, w = image.shape[:2]
 
-            if not _visible(l_shoulder, r_shoulder, l_hip, r_hip):
-                print("❌ Core landmarks not visible — image may be cropped")
-                return self._empty_result()
+        # ====================================================
+        # SHOULDER REGION
+        # ====================================================
 
-            # ── Pixel coordinates ──────────────────────────────
-            ls_px  = _px(l_shoulder, w, h)
-            rs_px  = _px(r_shoulder, w, h)
-            lh_px  = _px(l_hip,      w, h)
-            rh_px  = _px(r_hip,      w, h)
-            la_px  = _px(l_ankle,    w, h)
-            ra_px  = _px(r_ankle,    w, h)
-            lw_px  = _px(l_wrist,    w, h)
-            rw_px  = _px(r_wrist,    w, h)
-            nose_px = _px(nose,      w, h)
+        ls = landmarks[11]
+        rs = landmarks[12]
 
-            mid_shoulder = _mid(ls_px, rs_px)
-            mid_hip      = _mid(lh_px, rh_px)
-            mid_ankle    = _mid(la_px, ra_px)
+        x1 = int(min(ls.x, rs.x) * w)
+        x2 = int(max(ls.x, rs.x) * w)
 
-            # ── Width measurements ─────────────────────────────
+        y1 = int(min(ls.y, rs.y) * h)
 
-            shoulder_width = _dist_x(ls_px, rs_px)
-            hip_width      = _dist_x(lh_px, rh_px)
+        y2 = int(y1 + h * 0.12)
 
-            # Bust = weighted average of shoulder and chest-level width
-            mid_bust_l  = _mid(ls_px, lh_px)
-            mid_bust_r  = _mid(rs_px, rh_px)
-            chest_width = _dist_x(mid_bust_l, mid_bust_r)
-            bust_width  = shoulder_width * 0.60 + chest_width * 0.40
+        # ====================================================
+        # CLAMP
+        # ====================================================
 
-            # Waist = 60% of the way from shoulder to hip (geometric)
-            waist_l = (
-                ls_px[0] * 0.40 + lh_px[0] * 0.60,
-                ls_px[1] * 0.40 + lh_px[1] * 0.60,
-            )
-            waist_r = (
-                rs_px[0] * 0.40 + rh_px[0] * 0.60,
-                rs_px[1] * 0.40 + rh_px[1] * 0.60,
-            )
-            waist_width = _dist_x(waist_l, waist_r)
+        x1 = max(0, x1)
+        x2 = min(w, x2)
 
-            # Refine with wrist gap when arms are at the side
-            if _visible(l_wrist, r_wrist):
-                wrist_gap   = _dist_x(lw_px, rw_px)
-                wrist_mid_y = (lw_px[1] + rw_px[1]) / 2
-                waist_y     = (waist_l[1] + waist_r[1]) / 2
-                if abs(wrist_mid_y - waist_y) < h * 0.12:
-                    waist_width = waist_width * 0.55 + wrist_gap * 0.45
+        y1 = max(0, y1)
+        y2 = min(h, y2)
 
-            # Sanity clamp: waist should be 65–98% of hip width
-            waist_width = float(np.clip(
-                waist_width,
-                hip_width * 0.65,
-                hip_width * 0.98,
-            ))
+        # ====================================================
+        # CROP REGION
+        # ====================================================
 
             # ── Height measurements ────────────────────────────
 
@@ -493,19 +426,9 @@ class BodyAnalyzer:
             (0.02, 0.15, 0.42, 0.58),
         ]
 
-        for y_lo, y_hi, x_lo, x_hi in candidates:
-            x1, x2 = int(w * x_lo), int(w * x_hi)
-            y1, y2 = int(h * y_lo), int(h * y_hi)
-            crop   = bgr_image[y1:y2, x1:x2]
-            if crop.size == 0:
-                continue
-            mask  = _skin_mask(crop)
-            count = int(np.sum(mask))
-            if count > best_count:
-                best_count = count
-                best_crop  = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+        if skin_region.size == 0:
 
-        return best_crop
+            return "Medium"
 
     # =====================================================
     # EMPTY RESULT
@@ -530,94 +453,271 @@ class BodyAnalyzer:
         }
 
 
-# =========================================================
-# MODULE-LEVEL SKIN HELPERS
-# =========================================================
+        lab = cv2.cvtColor(
 
-def _skin_mask(bgr_crop: np.ndarray) -> np.ndarray:
-    """
-    Boolean mask for skin-coloured pixels.
-    Intersection of HSV and YCrCb ranges — robust across all tones.
-    """
-    hsv   = cv2.cvtColor(bgr_crop, cv2.COLOR_BGR2HSV)
-    ycrcb = cv2.cvtColor(bgr_crop, cv2.COLOR_BGR2YCrCb)
+            skin_region,
 
-    mask_hsv = cv2.inRange(
-        hsv,
-        np.array([0,  15,  50], dtype=np.uint8),
-        np.array([25, 200, 255], dtype=np.uint8),
-    )
-    mask_ycr = cv2.inRange(
-        ycrcb,
-        np.array([0,  133,  77], dtype=np.uint8),
-        np.array([255, 180, 135], dtype=np.uint8),
-    )
-    return cv2.bitwise_and(mask_hsv, mask_ycr).astype(bool)
+            cv2.COLOR_BGR2LAB
+        )
 
+        l_channel = lab[:, :, 0]
 
-def _map_tone(brightness: float, warmth: float) -> Tuple[str, float]:
-    """
-    Map cv2 LAB brightness (0–255) + warmth (0–255, 128=neutral)
-    to a skin tone label.
+        brightness = np.mean(
+            l_channel
+        )
 
-    CIE L* thresholds (converted from cv2's 0-255 scale → 0-100):
-      Fair         ≥ 68  (L* raw ≥ ~173)
-      Light Medium  58–67 (L* raw 148–171)
-      Medium        46–57 (L* raw 117–145)
-      Tan           34–45 (L* raw  87–115)
-      Deep          < 34  (L* raw  <  87)
-    """
-    L = brightness / 2.55          # cv2 L* 0-255 → CIE L* 0-100
-    A = warmth - 128.0             # signed warmth: + = red/warm
+        # ====================================================
+        # CLASSIFICATION
+        # ====================================================
 
-    print(f"CIE L*={L:.1f}  A*={A:.1f}")
+        if brightness > 190:
 
-    if L >= 70:
-        tone, conf = "Fair", 0.92
-    elif L >= 62:
-        tone, conf = ("Light Medium", 0.87) if A <= 6 else ("Fair", 0.85)
-    elif L >= 52:
-        tone, conf = "Light Medium", 0.88
-    elif L >= 42:
-        tone, conf = ("Medium", 0.87) if A > 8 else ("Light Medium", 0.84)
-    elif L >= 30:
-        tone, conf = "Medium", 0.87
-    elif L >= 20:
-        tone, conf = ("Tan", 0.86) if A > 5 else ("Medium", 0.84)
-    elif L >= 12:
-        tone, conf = "Tan", 0.85
-    else:
-        tone, conf = "Deep", 0.88
+            return "Fair"
 
-    return tone, conf
+        elif brightness > 160:
 
+            return "Light Medium"
 
-# =========================================================
-# SINGLETON  +  PUBLIC API
-# =========================================================
+        elif brightness > 125:
 
-_analyzer = BodyAnalyzer()
+            return "Medium"
 
+        elif brightness > 95:
 
-def analyze_body_measurements(image: np.ndarray) -> Dict[str, Any]:
-    """
-    Main entry point called by your FastAPI route.
+            return "Tan"
 
-    Parameters
-    ----------
-    image : np.ndarray — BGR image (cv2.imread output or camera frame).
-                         Recommended minimum resolution: 480 × 640.
-                         Higher resolution (720p / 1080p) gives better
-                         landmark accuracy and cleaner skin samples.
+        else:
 
-    Returns
-    -------
-    dict — body_type, skin_tone, height_category, confidences, features.
-    """
-    result = _analyzer.analyze(image)
-    print("\n✅ BODY ANALYSIS COMPLETE")
-    print(f"Body Type : {result['body_type']}  "
-          f"(conf={result['body_type_confidence']:.2f})")
-    print(f"Skin Tone : {result['skin_tone']}  "
-          f"(conf={result['skin_tone_confidence']:.2f})")
-    return result
+            return "Deep"
+
+    except Exception as e:
+
+        print(
+            f"❌ Skin tone error: {e}"
+        )
+
+        return "Medium"
+
+# ============================================================
+# HEIGHT CATEGORY
+# ============================================================
+
+def estimate_height_category(landmarks):
+
+    try:
+
+        left_shoulder = landmarks[11]
+        right_shoulder = landmarks[12]
+
+        left_ankle = landmarks[27]
+        right_ankle = landmarks[28]
+
+        shoulder_y = (
+            left_shoulder.y +
+            right_shoulder.y
+        ) / 2
+
+        ankle_y = (
+            left_ankle.y +
+            right_ankle.y
+        ) / 2
+
+        body_height = abs(
+            ankle_y - shoulder_y
+        )
+
+        # ====================================================
+        # CATEGORY
+        # ====================================================
+
+        if body_height > 0.72:
+
+            return "Tall"
+
+        elif body_height > 0.60:
+
+            return "Average"
+
+        else:
+
+            return "Petite"
+
+    except:
+
+        return "Average"
+
+# ============================================================
+# MAIN ANALYSIS FUNCTION
+# ============================================================
+
+def analyze_body_measurements(image_path):
+
+    try:
+
+        # ====================================================
+        # LOAD IMAGE
+        # ====================================================
+
+        image = cv2.imread(image_path)
+
+        if image is None:
+
+            return {
+
+                "success": False,
+
+                "error":
+                    "Image not found"
+            }
+
+        # ====================================================
+        # RGB
+        # ====================================================
+
+        rgb = cv2.cvtColor(
+
+            image,
+
+            cv2.COLOR_BGR2RGB
+        )
+
+        # ====================================================
+        # MEDIAPIPE
+        # ====================================================
+
+        results = pose.process(rgb)
+
+        if not results.pose_landmarks:
+
+            return {
+
+                "success": False,
+
+                "error":
+                    "Body not detected"
+            }
+
+        landmarks = (
+            results.pose_landmarks.landmark
+        )
+
+        # ====================================================
+        # VISIBILITY VALIDATION
+        # ====================================================
+
+        important_points = [
+
+            landmarks[11],
+            landmarks[12],
+            landmarks[23],
+            landmarks[24],
+        ]
+
+        visibility_score = np.mean([
+
+            lm.visibility
+
+            for lm in important_points
+        ])
+
+        if visibility_score < 0.45:
+
+            return {
+
+                "success": False,
+
+                "error":
+                    "Body visibility too low"
+            }
+
+        # ====================================================
+        # YOLO BODY SHAPE ANALYSIS
+        # ====================================================
+
+        body_result = analyze_body_shape(
+            image_path
+        )
+
+        body_type = body_result.get(
+
+            "body_type",
+
+            "Rectangle"
+        )
+
+        body_confidence = body_result.get(
+
+            "confidence",
+
+            0.0
+        )
+
+        measurements = body_result.get(
+
+            "measurements",
+
+            {}
+        )
+
+        print(
+            f"✅ YOLO Body Shape: {body_type}"
+        )
+
+        # ====================================================
+        # SKIN TONE
+        # ====================================================
+
+        skin_tone = detect_skin_tone(
+            image
+        )
+
+        print(
+            f"✅ Skin Tone: {skin_tone}"
+        )
+
+        # ====================================================
+        # HEIGHT CATEGORY
+        # ====================================================
+
+        height_category = (
+            estimate_height_category(
+                landmarks
+            )
+        )
+
+        # ====================================================
+        # RESPONSE
+        # ====================================================
+
+        return {
+
+            "success": True,
+
+            "body_type":
+                body_type,
+
+            "body_confidence":
+                body_confidence,
+
+            "skin_tone":
+                skin_tone,
+
+            "height_category":
+                height_category,
+
+            "measurements":
+                measurements,
+        }
+
+    except Exception as e:
+
+        print(
+            f"❌ MediaPipe analysis error: {e}"
+        )
+
+        return {
+
+            "success": False,
+
+            "error": str(e)
+        }

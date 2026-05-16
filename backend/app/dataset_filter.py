@@ -1,208 +1,577 @@
-"""
-dataset_filter.py
-─────────────────
-Filters raw Myntra styles.csv → fashion_dataset/filtered_styles.csv
-and copies matching images → fashion_dataset/filtered_images/
+# ============================================================
+# FILE: backend/app/dataset_filter.py
+# ============================================================
 
-Allowed article types
-──────────────────────
-MEN   : Tshirts · Shirts · Kurtas · Sweatshirts/Hoodies · Jeans ·
-        Trousers · Shorts · Track Pants · Blazers · Jackets · Suits
-WOMEN : Shirts · Tshirts · Tops · Kurtas/Kurtis · Suit Sets · Jeans ·
-        Trousers · Shorts · Skirts · Track Pants · Dresses ·
-        Jumpsuits · Blouses · Jackets · Sweatshirts
-NEVER : Innerwear · Swimwear · Lingerie · Bra · Briefs ·
-        Footwear · Bags · Jewellery · Socks · Personal care
+"""
+Filters raw Myntra styles.csv
+→ fashion_dataset/filtered_styles.csv
+
+Copies matching images
+→ fashion_dataset/filtered_images/
+
+ALLOWED:
+- Men/Women only
+- Apparel only
+- Fashion clothing only
+
+BLOCKED:
+- Kids
+- Boys
+- Girls
+- Innerwear
+- Shoes
+- Accessories
+- Beauty products
 """
 
 import os
 import shutil
-import cv2
 import pandas as pd
 
 # ============================================================
 # PATHS
 # ============================================================
 
-DATASET_PATH    = "fashion_dataset"
-IMAGES_PATH     = os.path.join(DATASET_PATH, "images")
-CSV_PATH        = os.path.join(DATASET_PATH, "styles.csv")
-FILTERED_IMAGES = os.path.join(DATASET_PATH, "filtered_images")
-FILTERED_CSV    = os.path.join(DATASET_PATH, "filtered_styles.csv")
+DATASET_PATH = "fashion_dataset"
 
-os.makedirs(FILTERED_IMAGES, exist_ok=True)
+IMAGES_PATH = os.path.join(
+    DATASET_PATH,
+    "images"
+)
+
+CSV_PATH = os.path.join(
+    DATASET_PATH,
+    "styles.csv"
+)
+
+FILTERED_IMAGES = os.path.join(
+    DATASET_PATH,
+    "filtered_images"
+)
+
+FILTERED_CSV = os.path.join(
+    DATASET_PATH,
+    "filtered_styles.csv"
+)
 
 # ============================================================
-# TOP-LEVEL FILTERS
+# CREATE OUTPUT FOLDER
 # ============================================================
 
-ALLOWED_GENDER     = {"Men", "Women"}
-ALLOWED_MASTER_CAT = {"Apparel"}
-ALLOWED_USAGE      = {"Casual", "Party", "Sports", "Ethnic", "Formal"}
+os.makedirs(
+    FILTERED_IMAGES,
+    exist_ok=True
+)
 
 # ============================================================
-# MEN — allowed article types  (exact Myntra strings)
+# FILTER SETTINGS
+# ============================================================
+
+ALLOWED_GENDER = {
+
+    "Men",
+    "Women"
+}
+
+ALLOWED_MASTER_CATEGORY = {
+
+    "Apparel"
+}
+
+ALLOWED_USAGE = {
+
+    "Casual",
+    "Party",
+    "Sports",
+    "Ethnic",
+    "Formal",
+}
+
+# ============================================================
+# MEN CATEGORIES
 # ============================================================
 
 MEN_ALLOWED_ARTICLES = {
-    # T-shirts
+
     "Tshirts",
-    # Shirts
     "Shirts",
-    # Kurtas / ethnic
-    "Kurtas", "Kurta Sets",
-    # Hoodies / Sweatshirts
-    "Sweatshirts", "Hoodies",
-    # Bottoms
-    "Jeans", "Trousers", "Shorts", "Cargos", "Joggers",
-    # Gymwear
-    "Track Pants", "Tracksuits", "Sports Jersey",
-    # Blazers / Formal
-    "Blazers", "Suits", "Suit Sets", "Nehru Jackets", "Waistcoat",
-    # Jackets / Outerwear
-    "Jackets", "Windcheater", "Rain Jacket",
+
+    "Kurtas",
+    "Kurta Sets",
+
+    "Sweatshirts",
+    "Hoodies",
+
+    "Jeans",
+    "Trousers",
+    "Shorts",
+    "Track Pants",
+    "Joggers",
+    "Cargos",
+
+    "Blazers",
+    "Suits",
+    "Waistcoat",
+
+    "Jackets",
+    "Windcheater",
 }
 
 # ============================================================
-# WOMEN — allowed article types  (exact Myntra strings)
+# WOMEN CATEGORIES
 # ============================================================
 
 WOMEN_ALLOWED_ARTICLES = {
-    # Shirts / Tshirts / Tops
-    "Shirts", "Tshirts", "Tops", "Blouses", "Tunics",
-    # Kurtas / ethnic
-    "Kurtas", "Kurtis", "Kurta Sets",
-    "Salwar", "Churidar", "Sarees", "Lehenga Choli", "Dupatta",
-    # Suit sets
-    "Suits", "Suit Sets",
-    # Bottoms
-    "Jeans", "Trousers", "Shorts", "Skirts",
-    "Capris", "Leggings", "Cargos", "Joggers",
-    # Gymwear
-    "Track Pants", "Tracksuits", "Sports Jersey",
-    # Dresses / Jumpsuits
-    "Dresses", "Jumpsuits", "Dungarees", "Co-ords",
-    # Outerwear
-    "Jackets", "Blazers", "Sweatshirts", "Hoodies",
-    "Shrugs", "Windcheater", "Rain Jacket",
-    # Tasteful nightwear (full coverage only)
-    "Lounge Pants", "Lounge Shorts", "Lounge Tshirts", "Nightdress",
+
+    "Tshirts",
+    "Shirts",
+    "Tops",
+    "Blouses",
+    "Tunics",
+
+    "Kurtas",
+    "Kurtis",
+    "Kurta Sets",
+
+    "Suits",
+    "Suit Sets",
+
+    "Jeans",
+    "Trousers",
+    "Shorts",
+    "Skirts",
+    "Leggings",
+    "Track Pants",
+    "Joggers",
+    "Cargos",
+
+    "Dresses",
+    "Jumpsuits",
+
+    "Jackets",
+    "Blazers",
+    "Sweatshirts",
+    "Hoodies",
 }
 
 # ============================================================
-# HARD EXCLUSION — blocked regardless of sub-category
+# HARD EXCLUSIONS
 # ============================================================
 
 HARD_EXCLUDED = {
+
     # Footwear
-    "Shoes", "Casual Shoes", "Sports Shoes", "Formal Shoes",
-    "Heels", "Flats", "Sandals", "Flip Flops", "Boots", "Shoe Accessories",
+    "Shoes",
+    "Casual Shoes",
+    "Sports Shoes",
+    "Formal Shoes",
+    "Heels",
+    "Flats",
+    "Sandals",
+    "Flip Flops",
+    "Boots",
+
     # Bags
-    "Bags", "Handbags", "Wallets", "Clutches", "Backpacks",
-    "Trolley Bag", "Messenger Bag", "Laptop Bag", "Travel Accessory",
+    "Bags",
+    "Handbags",
+    "Wallets",
+    "Backpacks",
+
     # Accessories
-    "Belts", "Watches", "Jewellery", "Earrings", "Necklace", "Ring",
-    "Bracelet", "Pendant", "Brooch", "Anklet",
-    "Headwear", "Caps", "Hat", "Sunglasses", "Eyewear",
+    "Belts",
+    "Watches",
+    "Jewellery",
+    "Sunglasses",
+    "Caps",
+    "Hat",
+
     # Hosiery
-    "Socks", "Stockings", "Tights",
-    # Innerwear / Swimwear / Lingerie — complete block
-    "Bra", "Briefs", "Boxers", "Trunk",
-    "Innerwear Vests", "Camisoles", "Shapewear",
-    "Swimwear", "Bikini", "Swimsuit", "Board Shorts",
-    "Bikini Top", "Bikini Bottom", "Lingerie Set",
-    "Negligee", "Robe", "Baby Doll", "Suspenders",
-    "Thermal Bottoms", "Thermal Tops",
-    # Beauty / Personal care
-    "Perfume and Body Mist", "Sunscreen", "Lipstick",
-    "Nail Polish", "Foundation", "Mascara", "Compact",
-    "Kajal and Eyeliner", "Lip Gloss", "Face Moisturisers",
+    "Socks",
+    "Stockings",
+
+    # Innerwear
+    "Bra",
+    "Briefs",
+    "Boxers",
+    "Trunk",
+    "Innerwear Vests",
+    "Camisoles",
+    "Shapewear",
+    "Lingerie Set",
+    "Swimwear",
+    "Bikini",
+    "Rompers",
+    "Trunk",
+    "Trunks",
+    "Innerwear Vests",
+    "Baby Dolls",
+    "Swimwear",
+
+    # Beauty
+    "Perfume and Body Mist",
+    "Lipstick",
+    "Nail Polish",
+    "Compact",
+
     # Misc
-    "Water Bottle", "Umbrellas", "Key chain",
-    "Free Gifts", "Sports Accessories", "Vouchers",
+    "Water Bottle",
+    "Umbrellas",
 }
 
 # ============================================================
-# LOAD
+# LOAD CSV
 # ============================================================
 
-print("Loading styles.csv …")
-df = pd.read_csv(CSV_PATH, on_bad_lines="skip")
-print(f"  Total rows            : {len(df)}")
+print("\nLoading styles.csv ...")
 
-df = df[df["usage"].isin(ALLOWED_USAGE)]
-print(f"  After usage           : {len(df)}")
+df = pd.read_csv(
+    CSV_PATH,
+    on_bad_lines="skip"
+)
 
-df = df[df["gender"].isin(ALLOWED_GENDER)]
-print(f"  After gender          : {len(df)}")
+print(
+    f"Total rows : {len(df)}"
+)
 
-df = df[df["masterCategory"].isin(ALLOWED_MASTER_CAT)]
-print(f"  After masterCat       : {len(df)}")
+# ============================================================
+# USAGE FILTER
+# ============================================================
 
-df = df[~df["articleType"].isin(HARD_EXCLUDED)]
-print(f"  After hard exclusions : {len(df)}")
+df = df[
+    df["usage"].isin(
+        ALLOWED_USAGE
+    )
+]
 
-# Per-gender article allow-list
-def _allowed(row):
-    if row["gender"] == "Men":
-        return row["articleType"] in MEN_ALLOWED_ARTICLES
-    if row["gender"] == "Women":
-        return row["articleType"] in WOMEN_ALLOWED_ARTICLES
+print(
+    f"After usage filter : {len(df)}"
+)
+
+# ============================================================
+# GENDER FILTER
+# ============================================================
+
+df = df[
+    df["gender"].isin(
+        ALLOWED_GENDER
+    )
+]
+
+print(
+    f"After gender filter : {len(df)}"
+)
+
+# ============================================================
+# REMOVE KIDS PRODUCTS
+# ============================================================
+# ============================================================
+# REMOVE KIDS / INNERWEAR PRODUCTS
+# ============================================================
+
+blocked_words = [
+
+    # kids
+
+    "kids",
+    "girls",
+    "boys",
+    "baby",
+    "infant",
+    "toddler",
+    "junior",
+
+    # innerwear
+
+    "romper",
+    "trunk",
+    "brief",
+    "boxer",
+    "bra",
+    "lingerie",
+    "camisole",
+    "nightdress",
+    "night suit",
+    "innerwear",
+
+    # brands often kids
+
+    "gini and jony",
+]
+
+df = df[
+
+    ~df["productDisplayName"]
+
+    .astype(str)
+
+    .str.lower()
+
+    .str.contains(
+
+        "|".join(blocked_words),
+
+        na=False
+    )
+]
+
+# ============================================================
+# APPAREL ONLY
+# ============================================================
+
+df = df[
+    df["masterCategory"].isin(
+        ALLOWED_MASTER_CATEGORY
+    )
+]
+
+print(
+    f"After apparel filter : {len(df)}"
+)
+
+# ============================================================
+# REMOVE BAD CATEGORIES
+# ============================================================
+
+df = df[
+    ~df["articleType"]
+    .isin(HARD_EXCLUDED)
+]
+
+print(
+    f"After exclusions : {len(df)}"
+)
+
+# ============================================================
+# MEN/WOMEN ARTICLE FILTER
+# ============================================================
+
+def is_allowed(row):
+
+    gender = row["gender"]
+
+    article = row["articleType"]
+
+    if gender == "Men":
+
+        return article in MEN_ALLOWED_ARTICLES
+
+    elif gender == "Women":
+
+        return article in WOMEN_ALLOWED_ARTICLES
+
     return False
 
-df = df[df.apply(_allowed, axis=1)].copy()
-print(f"  After article filter  : {len(df)}")
+df = df[
+    df.apply(
+        is_allowed,
+        axis=1
+    )
+].copy()
 
-df = df.dropna(subset=["id"])
+print(
+    f"After article filter : {len(df)}"
+)
+
+# ============================================================
+# CLEAN IDS
+# ============================================================
+
+df = df.dropna(
+    subset=["id"]
+)
+
 df["id"] = df["id"].astype(int)
 
 # ============================================================
-# IMAGE VALIDATION
+# VALIDATE IMAGES
 # ============================================================
 
-print("\nValidating images …")
-valid = []
-for img_id in df["id"]:
-    src = os.path.join(IMAGES_PATH, f"{img_id}.jpg")
-    if os.path.exists(src) and cv2.imread(src) is not None:
-        valid.append(img_id)
+print("\nValidating images ...")
 
-df = df[df["id"].isin(valid)].reset_index(drop=True)
-print(f"  Valid images          : {len(df)}")
+valid_rows = []
+
+for _, row in df.iterrows():
+
+    image_id = str(row["id"])
+
+    possible_files = [
+
+        f"{image_id}.jpg",
+        f"{image_id}.jpeg",
+        f"{image_id}.png",
+        f"{image_id}.JPG",
+    ]
+
+    found = False
+
+    for file_name in possible_files:
+
+        image_path = os.path.join(
+            IMAGES_PATH,
+            file_name
+        )
+
+        if os.path.exists(image_path):
+
+            # ================================================
+            # SAVE IMAGE FILE NAME
+            # ================================================
+
+            row["image_file"] = file_name
+
+            valid_rows.append(row)
+
+            found = True
+
+            break
+
+    if not found:
+        continue
 
 # ============================================================
-# BALANCE  (up to 1500 per gender)
+# NEW DATAFRAME
+# ============================================================
+
+df = pd.DataFrame(valid_rows)
+
+print(
+    f"Valid images : {len(df)}"
+)
+
+# ============================================================
+# EMPTY CHECK
+# ============================================================
+
+if len(df) == 0:
+
+    raise Exception(
+        "\n❌ ZERO VALID IMAGES FOUND"
+    )
+
+# ============================================================
+# BALANCE DATASET
 # ============================================================
 
 PER_GENDER = 1500
-men_df   = df[df["gender"] == "Men"].head(PER_GENDER)
-women_df = df[df["gender"] == "Women"].head(PER_GENDER)
-df       = pd.concat([men_df, women_df]).reset_index(drop=True)
 
-print(f"\nFinal: {len(df)} rows  (Men={len(men_df)}  Women={len(women_df)})")
+men_df = df[
+    df["gender"] == "Men"
+].head(PER_GENDER)
+
+women_df = df[
+    df["gender"] == "Women"
+].head(PER_GENDER)
+
+df = pd.concat([
+
+    men_df,
+    women_df
+
+]).reset_index(drop=True)
+
+print(
+    f"\nFinal dataset : {len(df)}"
+)
+
+print(
+    f"Men   : {len(men_df)}"
+)
+
+print(
+    f"Women : {len(women_df)}"
+)
 
 # ============================================================
 # COPY IMAGES
 # ============================================================
 
+print("\nCopying images ...")
+
 copied = 0
-for img_id in df["id"]:
-    src = os.path.join(IMAGES_PATH,     f"{img_id}.jpg")
-    dst = os.path.join(FILTERED_IMAGES, f"{img_id}.jpg")
-    if not os.path.exists(dst) and os.path.exists(src):
-        shutil.copy2(src, dst)
+
+for _, row in df.iterrows():
+
+    file_name = row["image_file"]
+
+    source = os.path.join(
+        IMAGES_PATH,
+        file_name
+    )
+
+    destination = os.path.join(
+        FILTERED_IMAGES,
+        file_name
+    )
+
+    if (
+
+        os.path.exists(source)
+
+        and
+
+        not os.path.exists(destination)
+    ):
+
+        shutil.copy2(
+            source,
+            destination
+        )
+
         copied += 1
 
-df.to_csv(FILTERED_CSV, index=False)
+print(
+    f"Images copied : {copied}"
+)
+
+# ============================================================
+# SAVE CSV
+# ============================================================
+
+df.to_csv(
+    FILTERED_CSV,
+    index=False
+)
+
+print(
+    f"\nCSV saved -> {FILTERED_CSV}"
+)
+
+# ============================================================
+# DONE
+# ============================================================
 
 print("\n" + "=" * 60)
-print("✅  DATASET FILTER COMPLETE")
-print("=" * 60)
-print(f"Images copied : {copied}")
-print(f"CSV saved     : {FILTERED_CSV}")
+
+print("✅ DATASET FILTER COMPLETE")
+
 print("=" * 60)
 
-print("\nArticle-type breakdown:")
-for at, cnt in df["articleType"].value_counts().head(35).items():
-    g = df[df["articleType"] == at]["gender"].value_counts().to_dict()
-    print(f"  {at:<30} {cnt:>5}  {g}")
+print(
+    f"Final rows : {len(df)}"
+)
+
+print(
+    f"Filtered images : "
+    f"{FILTERED_IMAGES}"
+)
+
+print("=" * 60)
+
+# ============================================================
+# ARTICLE BREAKDOWN
+# ============================================================
+
+print("\nTop article types:\n")
+
+for article, count in (
+
+    df["articleType"]
+
+    .value_counts()
+
+    .head(30)
+
+    .items()
+):
+
+    print(f"{article:<25} {count}")

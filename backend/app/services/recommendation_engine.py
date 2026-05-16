@@ -1,17 +1,36 @@
+# ============================================================
+# FILE: backend/app/services/recommendation_engine.py
+# ============================================================
+
 import os
-import random
 import numpy as np
 
-from pymongo import MongoClient
 from dotenv import load_dotenv
+from pymongo import MongoClient
 
-# =========================================================
+from sklearn.metrics.pairwise import cosine_similarity
+
+from tensorflow.keras.applications.mobilenet_v2 import (
+    MobileNetV2,
+    preprocess_input
+)
+
+from tensorflow.keras.preprocessing import image
+
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import GlobalAveragePooling2D
+
+# ============================================================
 # ENV
-# =========================================================
+# ============================================================
 
 load_dotenv()
 
 MONGO_URL = os.getenv("MONGO_URL")
+
+# ============================================================
+# DB
+# ============================================================
 
 client = MongoClient(MONGO_URL)
 
@@ -19,19 +38,46 @@ db = client["ai_fashion"]
 
 outfits_collection = db["outfits"]
 
-print("✅ MongoDB Connected in recommendation_engine")
+print("✅ MongoDB Connected")
 
-# =========================================================
+# ============================================================
 # BASE URL
-# =========================================================
+# ============================================================
 
 BASE_URL = "http://127.0.0.1:8000"
 
-# =========================================================
-# MEN CATEGORIES
-# =========================================================
+# ============================================================
+# MODEL
+# ============================================================
+
+print("Loading MobileNetV2...")
+
+base_model = MobileNetV2(
+
+    weights="imagenet",
+
+    include_top=False,
+
+    input_shape=(224, 224, 3)
+)
+
+model = Model(
+
+    inputs=base_model.input,
+
+    outputs=GlobalAveragePooling2D()(
+        base_model.output
+    )
+)
+
+print("✅ MobileNet Loaded")
+
+# ============================================================
+# ALLOWED CATEGORIES
+# ============================================================
 
 MEN_ALLOWED = {
+
     "tshirts",
     "shirts",
     "kurtas",
@@ -41,63 +87,83 @@ MEN_ALLOWED = {
     "shorts",
     "track pants",
     "blazers",
-    "sweatshirts",
     "jackets",
-    "gymwear",
+    "sweatshirts",
 }
-
-# =========================================================
-# WOMEN CATEGORIES
-# =========================================================
 
 WOMEN_ALLOWED = {
-    "shirts",
-    "tshirts",
+
     "tops",
+    "tshirts",
+    "shirts",
     "kurtis",
-    "kurtas",
     "dresses",
+    "skirts",
     "jeans",
     "trousers",
-    "shorts",
-    "skirts",
     "leggings",
+    "shorts",
     "track pants",
-    "sweatshirts",
     "jackets",
-    "gymwear",
-    "suit sets",
-    "blouses",
-    "tunics",
+    "sweatshirts",
 }
 
-# =========================================================
+# ============================================================
+# FEATURE EXTRACTION
+# ============================================================
+
+def extract_features(img_path):
+
+    try:
+
+        img = image.load_img(
+
+            img_path,
+
+            target_size=(224, 224)
+        )
+
+        img_array = image.img_to_array(img)
+
+        img_array = np.expand_dims(
+            img_array,
+            axis=0
+        )
+
+        img_array = preprocess_input(
+            img_array
+        )
+
+        features = model.predict(
+            img_array,
+            verbose=0
+        )[0]
+
+        features = features / np.linalg.norm(
+            features
+        )
+
+        return features
+
+    except Exception as e:
+
+        print(f"❌ Feature extraction error: {e}")
+
+        return None
+
+
+# ============================================================
 # IMAGE URL
-# =========================================================
+# ============================================================
 
 def build_image_url(filename):
+
     return f"{BASE_URL}/fashion_images/{filename}"
 
 
-# =========================================================
-# NORMALIZE GENDER
-# FIX #1: Frontend sends "Female"/"Male"; DB stores "Women"/"Men"
-# =========================================================
-
-def normalize_gender(gender: str) -> str | None:
-    if not gender:
-        return None
-    g = gender.strip().lower()
-    if g in ("female", "woman", "women", "f"):
-        return "women"
-    if g in ("male", "man", "men", "m"):
-        return "men"
-    return g  # pass through lowercase as-is
-
-
-# =========================================================
+# ============================================================
 # MAIN FUNCTION
-# =========================================================
+# ============================================================
 
 def get_recommendations(
 
@@ -124,258 +190,322 @@ def get_recommendations(
 
     try:
 
-        # =================================================
-        # LOAD OUTFITS
-        # =================================================
+        uploaded_features = extract_features(
+            uploaded_image_path
+        )
+
+        if uploaded_features is None:
+
+            return {
+
+                "success": False,
+
+                "recommendations": [],
+
+                "error":
+                    "Feature extraction failed"
+            }
 
         outfits = list(
-            outfits_collection.find({}).limit(20000)
+            outfits_collection.find({})
         )
 
         print(f"\nLoaded outfits : {len(outfits)}")
 
-        # =================================================
-        # FIX #1 — Normalize gender before comparing
-        # =================================================
+        # ====================================================
+        # STRICT GENDER FILTER
+        # ====================================================
 
-        normalized_gender = normalize_gender(gender)
+        if gender:
 
-        if normalized_gender:
+            gender = gender.strip().lower()
 
             outfits = [
+
                 o for o in outfits
-                if o.get("gender", "").strip().lower() == normalized_gender
+
+                if str(
+                    o.get(
+                        "gender",
+                        ""
+                    )
+                ).strip().lower()
+
+                == gender
             ]
 
-        print(f"After gender filter ({normalized_gender}) : {len(outfits)}")
+        print(
+            f"After gender filter : {len(outfits)}"
+        )
 
-        # =================================================
+        # ====================================================
+        # REMOVE KIDS PRODUCTS
+        # ====================================================
+
+        kids_words = [
+
+            "kids",
+            "girls",
+            "boys",
+            "baby",
+            "infant",
+        ]
+
+        cleaned = []
+
+        for o in outfits:
+
+            name = str(
+
+                o.get(
+                    "productDisplayName",
+
+                    o.get(
+                        "name",
+                        ""
+                    )
+                )
+
+            ).lower()
+
+            if any(
+                word in name
+                for word in kids_words
+            ):
+                continue
+
+            cleaned.append(o)
+
+        outfits = cleaned
+
+        print(
+            f"After kids cleanup : {len(outfits)}"
+        )
+
+        # ====================================================
         # CATEGORY FILTER
-        # =================================================
+        # ====================================================
 
-        if normalized_gender == "men":
+        filtered = []
+
+        for o in outfits:
+
+            category = str(
+
+                o.get(
+                    "articleType",
+
+                    o.get(
+                        "category",
+                        ""
+                    )
+                )
+
+            ).lower()
+
+            if gender == "men":
+
+                if category in MEN_ALLOWED:
+                    filtered.append(o)
+
+            elif gender == "women":
+
+                if category in WOMEN_ALLOWED:
+                    filtered.append(o)
+
+        outfits = filtered
+
+        print(
+            f"After category filter : {len(outfits)}"
+        )
+
+        # ====================================================
+        # DISPLAY CATEGORY
+        # ====================================================
+
+        if (
+
+            display_category
+
+            and
+
+            display_category != "All Categories"
+        ):
 
             outfits = [
+
                 o for o in outfits
+
                 if str(
-                    o.get("display_category", o.get("category", ""))
-                ).lower() in MEN_ALLOWED
+                    o.get(
+                        "articleType",
+                        ""
+                    )
+                ).lower()
+
+                == display_category.lower()
             ]
 
-        elif normalized_gender == "women":
-
-            outfits = [
-                o for o in outfits
-                if str(
-                    o.get("display_category", o.get("category", ""))
-                ).lower() in WOMEN_ALLOWED
-            ]
-
-        print(f"After allowed category filter : {len(outfits)}")
-
-        # =================================================
-        # DISPLAY CATEGORY FILTER
-        # =================================================
-
-        if display_category and display_category != "All":
-
-            outfits = [
-                o for o in outfits
-                if str(
-                    o.get("display_category", o.get("category", ""))
-                ).lower() == display_category.lower()
-            ]
-
-        print(f"After display category filter : {len(outfits)}")
-
-        # =================================================
+        # ====================================================
         # COLOR FILTER
-        # =================================================
+        # ====================================================
 
         if color and color != "All Colors":
 
             outfits = [
+
                 o for o in outfits
+
                 if str(
-                    o.get("baseColour", o.get("color", ""))
-                ).lower() == color.lower()
+                    o.get(
+                        "baseColour",
+                        ""
+                    )
+                ).lower()
+
+                == color.lower()
             ]
 
-        print(f"After color filter : {len(outfits)}")
-
-        # =================================================
-        # EMPTY CHECK
-        # =================================================
-
-        if len(outfits) == 0:
-
-            return {
-                "success": False,
-                "recommendations": [],
-                "error": "No outfits found after filtering",
-                "gender": normalized_gender,
-            }
-
-        # =================================================
-        # GENERATE SCORES
-        # =================================================
+        # ====================================================
+        # RECOMMENDATIONS
+        # ====================================================
 
         recommendations = []
 
         for outfit in outfits:
 
-            score = random.uniform(0.55, 0.78)
+            try:
 
-            # =============================================
-            # BODY TYPE BONUS
-            # =============================================
+                embedding = np.array(
 
-            outfit_body_types = outfit.get("body_types", [])
-            if isinstance(outfit_body_types, list):
-                outfit_body_str = " ".join(outfit_body_types).lower()
-            else:
-                outfit_body_str = str(outfit_body_types).lower()
+                    outfit.get(
+                        "embedding",
+                        []
+                    )
+                )
 
-            outfit_body_single = str(
-                outfit.get("recommended_body_type", "")
-            ).lower()
+                if len(embedding) == 0:
+                    continue
 
-            if body_type and (
-                body_type.lower() in outfit_body_str
-                or body_type.lower() == outfit_body_single
-            ):
-                score += 0.18
+                score = cosine_similarity(
 
-            # =============================================
-            # SKIN TONE BONUS
-            # =============================================
+                    [uploaded_features],
 
-            outfit_skin_tones = outfit.get("skin_tones", [])
-            if isinstance(outfit_skin_tones, list):
-                outfit_skin_str = " ".join(outfit_skin_tones).lower()
-            else:
-                outfit_skin_str = str(outfit_skin_tones).lower()
+                    [embedding]
 
-            outfit_skin_single = str(
-                outfit.get("recommended_skin_tone", "")
-            ).lower()
+                )[0][0]
 
-            if skin_tone and (
-                skin_tone.lower() in outfit_skin_str
-                or skin_tone.lower() == outfit_skin_single
-            ):
-                score += 0.12
+                score = float(score)
 
-            # =============================================
-            # OCCASION BONUS
-            # =============================================
+                if score < 0.45:
+                    continue
 
-            outfit_usage = str(outfit.get("usage", outfit.get("occasion", ""))).lower()
+                image_file = outfit.get(
+                    "image_file",
+                    ""
+                )
 
-            if (
-                occasion
-                and occasion != "All Occasions"
-                and outfit_usage == occasion.lower()
-            ):
-                score += 0.10
+                if not image_file:
+                    continue
 
-            # =============================================
-            # SLEEVES BONUS
-            # =============================================
+                recommendations.append({
 
-            outfit_sleeves = str(outfit.get("sleeve", outfit.get("sleeves", ""))).lower()
+                    "id":
 
-            if (
-                sleeves
-                and sleeves != "All Sleeves"
-                and outfit_sleeves == sleeves.lower()
-            ):
-                score += 0.08
+                        str(
+                            outfit.get("_id")
+                        ),
 
-            # =============================================
-            # NORMALIZE
-            # =============================================
+                    "outfit_name":
 
-            score = min(score, 0.99)
+                        outfit.get(
+                            "articleType",
+                            "Fashion"
+                        ),
 
-            # =============================================
-            # FIX #2 — Try both "image_file" and "filename"
-            # =============================================
+                    "image_url":
 
-            image_file = (
-                outfit.get("image_file", "")
-                or outfit.get("filename", "")
-            )
+                        build_image_url(
+                            image_file
+                        ),
 
-            if not image_file:
+                    "category":
+
+                        outfit.get(
+                            "articleType",
+                            ""
+                        ),
+
+                    "gender":
+
+                        outfit.get(
+                            "gender",
+                            ""
+                        ),
+
+                    "color":
+
+                        outfit.get(
+                            "baseColour",
+                            ""
+                        ),
+
+                    "occasion":
+
+                        outfit.get(
+                            "usage",
+                            ""
+                        ),
+
+                    "sleeves":
+
+                        outfit.get(
+                            "sleeve",
+                            ""
+                        ),
+
+                    "similarity_score":
+
+                        round(score, 4),
+
+                    "similarity_percentage":
+
+                        f"{int(score * 100)}%",
+
+                    "rank":
+
+                        len(recommendations) + 1,
+                })
+
+            except Exception as e:
+
+                print(f"Skipping item: {e}")
+
                 continue
 
-            # =============================================
-            # CATEGORY
-            # =============================================
-
-            category = outfit.get(
-                "display_category",
-                outfit.get("category", outfit.get("articleType", "Fashion"))
-            )
-
-            # =============================================
-            # FIX #3 — Include "outfit_name", "rank",
-            #           "similarity_score", "similarity_percentage"
-            #           which the frontend card renderer needs
-            # =============================================
-
-            outfit_name = outfit.get(
-                "name",
-                outfit.get("productDisplayName", image_file)
-            )
-
-            recommendations.append({
-                "id":                   str(outfit.get("_id")),
-                "outfit_name":          outfit_name,
-                "image_url":            build_image_url(image_file),
-                "category":             category,
-                "gender":               outfit.get("gender", ""),
-                "color":                outfit.get("baseColour", outfit.get("color", "")),
-                "occasion":             outfit.get("usage", outfit.get("occasion", "Casual")),
-                "sleeves":              outfit.get("sleeves", outfit.get("sleeve", "")),
-                "score":                round(score, 2),
-                "similarity_score":     round(score, 2),
-                "similarity_percentage": f"{round(score * 100)}%",
-                "rank":                 0,   # assigned after sort
-                "body_type":            outfit.get("recommended_body_type", ""),
-                "skin_tone":            outfit.get("recommended_skin_tone", ""),
-            })
-
-        # =================================================
-        # SORT
-        # =================================================
-
         recommendations = sorted(
+
             recommendations,
-            key=lambda x: x["score"],
-            reverse=True,
+
+            key=lambda x:
+                x["similarity_score"],
+
+            reverse=True
         )
-
-        # =================================================
-        # ASSIGN RANK
-        # =================================================
-
-        for i, rec in enumerate(recommendations):
-            rec["rank"] = i + 1
-
-        # =================================================
-        # LIMIT
-        # =================================================
 
         recommendations = recommendations[:top_k]
 
-        print(f"Final recommendations : {len(recommendations)}")
+        print(
+            f"Final recommendations : "
+            f"{len(recommendations)}"
+        )
 
         return {
-            "success":         True,
-            "recommendations": recommendations,
-            "gender":          normalized_gender,
+
+            "success": True,
+
+            "recommendations":
+                recommendations
         }
 
     except Exception as e:
@@ -386,7 +516,10 @@ def get_recommendations(
         traceback.print_exc()
 
         return {
-            "success":         False,
+
+            "success": False,
+
             "recommendations": [],
-            "error":           str(e),
+
+            "error": str(e)
         }
